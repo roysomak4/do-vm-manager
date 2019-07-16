@@ -1,0 +1,17 @@
+[
+  {
+    "hostname": "k8s-manager",
+    "public": "134.209.38.240",
+    "private": "10.132.180.196"
+  },
+  {
+    "hostname": "k8s-worker1",
+    "public": "165.227.127.163",
+    "private": "10.132.180.204"
+  },
+  {
+    "hostname": "k8s-worker2",
+    "public": "167.71.80.115",
+    "private": "10.132.180.210"
+  }
+]

@@ -1,0 +1,3 @@
+k8s-manager
+k8s-worker1
+k8s-worker2
