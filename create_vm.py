@@ -15,10 +15,10 @@ def create_vms():
 
     # loop through the host names and execute digitalocean API to create VMs
     for host in hosts:
-        if not host_exists(host):
-            cmd = f'doctl compute droplet create {host} --image {args.image} --size {args.size} --region {args.region}'
-            if args.tag_name.strip() != '':
-                cmd += f' --tag-name {args.tag_name}'
+        hostname = host[0]
+        role = host[1]
+        if not host_exists(hostname):
+            cmd = f'doctl compute droplet create {hostname} --image {args.image} --size {args.size} --region {args.region} --tag-names "{role}"'
             if args.enable_private_networking:
                 cmd += ' --enable-private-networking'
             if args.enable_monitoring:
@@ -61,6 +61,7 @@ def get_vm_info():
             networks = vm['networks']['v4']
             for network in networks:
                 server[network['type']] = network['ip_address']
+            server['role'] = vm['tags'][0]
             servers.append(server)
     return servers
 
@@ -100,7 +101,7 @@ def parse_arguments():
                         type=str,
                         help='Datacenter region where the VMs will be created.',
                         default='nyc3')
-    parser.add_argument('--tag-name',
+    parser.add_argument('--tag-names',
                         type=str,
                         help='Tag names for the VMs',
                         default='')
@@ -139,8 +140,9 @@ def get_hostnames(filename):
     hosts = []
     with open(filename, 'r') as f:
         for line in f:
-            if line.strip('\n').strip() != '':
-                hosts.append(line.strip('\n').strip())
+            lineitem = line.strip('\n').strip()
+            if lineitem != '':
+                hosts.append(lineitem.split('\t'))
     return hosts
 
 
