@@ -66,16 +66,22 @@ def get_vm_info():
     return servers
 
 
+def get_vm_hostname():
+    vm_info = sh.doctl.compute.droplet.ls("-o", "json")
+    hostnames = []
+    if vm_info.stdout.decode('utf-8') != 'null':
+        vms = json.loads(vm_info.stdout.decode('utf-8'))
+        for vm in vms:
+            hostnames.append(vm['name'])
+    return hostnames
+
+
 def host_exists(hostname):
     retinfo = False
-    servers = get_vm_info()
+    servers = get_vm_hostname()
     if len(servers) > 0:
-        for server in servers:
-            if hostname in server:
-                retinfo = True
-                break
-    else:
-        retinfo = False
+        if hostname in servers:
+            retinfo = True
     return retinfo
 
 
@@ -100,7 +106,7 @@ def parse_arguments():
     parser.add_argument('--region',
                         type=str,
                         help='Datacenter region where the VMs will be created.',
-                        default='nyc3')
+                        default='nyc1')
     parser.add_argument('--tag-names',
                         type=str,
                         help='Tag names for the VMs',
