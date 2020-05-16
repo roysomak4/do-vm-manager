@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sh
 from time import sleep
 
@@ -18,7 +19,11 @@ def create_vms():
         hostname = host[0]
         role = host[1]
         if not host_exists(hostname):
-            cmd = f'doctl compute droplet create {hostname} --image {args.image} --size {args.size} --region {args.region} --tag-names "{role}"'
+            cmd = f'doctl compute droplet create {hostname} --image {args.image} --region {args.region} --tag-names "{role}"'
+            if role == 'manager':
+                cmd += f' --size {args.cp_size}'
+            else:
+                cmd += f' --size {args.worker_size}'
             if args.enable_private_networking:
                 cmd += ' --enable-private-networking'
             if args.enable_monitoring:
@@ -28,26 +33,27 @@ def create_vms():
             vms_created = True
         else:
             print(f'{host} already exists in digitalocean. Aborted VM creation for this hostname.')
+    
+    save_vm_info()
 
-    if vms_created:
-        # wait for 3 seconds before pinging digitalocean for newly created servers
-        print('Waiting for 3 seconds before querying info from newly created VMs on digitalocean...')
-        sleep(3)
+    
+def save_vm_info():
+    # wait for 5 seconds before pinging digitalocean for newly created servers
+    print('Waiting for 5 seconds before querying info from newly created VMs on digitalocean...')
+    sleep(5)
 
-        # get info for the created servers and write to file
-        print('Querying digitalocean for newly created VMs...')
-        servers = get_vm_info()
-        if len(servers) > 0:
-            print('Info for newly created VMs retrieved successfully.')
-            print(servers)
-            # write the server info to output json file
-            print('Saving VM info to output file...')
-            save_server_info(servers)
-            print('VM info written to vms.json')
-        else:
-            print('No server info retrieved.')
+    # get info for the created servers and write to file
+    print('Querying digitalocean for newly created VMs...')
+    servers = get_vm_info()
+    if len(servers) > 0:
+        print('Info for newly created VMs retrieved successfully.')
+        print(servers)
+        # write the server info to output json file
+        print('Saving VM info to output file...')
+        save_server_info(servers)
+        print('VM info written to vms.json')
     else:
-        print('No new VMs were created.')
+        print('No server info retrieved.')
 
 
 def get_vm_info():
@@ -86,7 +92,11 @@ def host_exists(hostname):
 
 
 def save_server_info(servers):
-    with open('vms.json', 'w') as vmf:
+    # check if the "output" directory exists
+    if not os.path.isdir("output"):
+        os.mkdir("output")
+
+    with open('output/vms.json', 'w') as vmf:
         json.dump(servers, vmf, indent=2)
 
 
@@ -99,7 +109,11 @@ def parse_arguments():
                         type=str,
                         help='Image for the VMs. E.g ubuntu-18-04-x64',
                         default='ubuntu-18-04-x64')
-    parser.add_argument('--size',
+    parser.add_argument('--cp-size',
+                        type=str,
+                        help='VM size. E.g. s-2vcpu-2gb',
+                        default='s-2vcpu-2gb')
+    parser.add_argument('--worker-size',
                         type=str,
                         help='VM size. E.g. s-2vcpu-2gb',
                         default='s-2vcpu-2gb')
