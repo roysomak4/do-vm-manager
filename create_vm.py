@@ -35,14 +35,22 @@ def create_vms():
         else:
             print(f'{host} already exists in digitalocean. Aborted VM creation for this hostname.')
     
+<<<<<<< HEAD
     save_vm_info(server_count)
 
     
 def save_vm_info(server_count):
+=======
+    save_vm_info()
+
+    
+def save_vm_info():
+>>>>>>> 32eaefb79a176090ff86b184bef759efd37e45a1
     # wait for 5 seconds before pinging digitalocean for newly created servers
     print('Waiting for 5 seconds before querying info from newly created VMs on digitalocean...')
     sleep(5)
 
+<<<<<<< HEAD
     vms_available = False
     max_tries = 5
     tries = 0
@@ -67,6 +75,20 @@ def save_vm_info(server_count):
             else:
                 print('Some servers are still initializing. Trying again in 5 seconds...')
                 sleep(5)
+=======
+    # get info for the created servers and write to file
+    print('Querying digitalocean for newly created VMs...')
+    servers = get_vm_info()
+    if len(servers) > 0:
+        print('Info for newly created VMs retrieved successfully.')
+        print(servers)
+        # write the server info to output json file
+        print('Saving VM info to output file...')
+        save_server_info(servers)
+        print('VM info written to vms.json')
+    else:
+        print('No server info retrieved.')
+>>>>>>> 32eaefb79a176090ff86b184bef759efd37e45a1
 
 
 def get_vm_info():
