@@ -1,4 +1,0 @@
-k8s-cp01	manager
-k8s-worker1	worker
-k8s-worker2	worker
-k8s-worker3	worker
