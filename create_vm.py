@@ -29,6 +29,9 @@ def create_vms():
                 cmd += ' --enable-private-networking'
             if args.enable_monitoring:
                 cmd += ' --enable-monitoring'
+            if args.ssh_keys.strip() != '':
+                cmd += f' --ssh-keys {args.ssh_keys}'
+            print(f'Initializing creation of VM {host}...')
             sh.bash("-c", cmd)
             print(f'VM creation initialized for {host}.')
             vms_created = True
@@ -137,6 +140,10 @@ def parse_arguments():
     parser.add_argument('--tag-names',
                         type=str,
                         help='Tag names for the VMs',
+                        default='')
+    parser.add_argument('--ssh-keys',
+                        type=str,
+                        help='SSH key ID or fingerprint in digitalocean. This info can be obtained from DO dashboard or by running "doctl compute ssh-keys ls" command.',
                         default='')
     parser.add_argument('--enable-private-networking',
                         type=str2bool,
