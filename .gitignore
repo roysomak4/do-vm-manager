@@ -57,3 +57,6 @@ instance/settings.py
 
 # vscode settings
 .vscode/
+
+# host files
+hosts/
