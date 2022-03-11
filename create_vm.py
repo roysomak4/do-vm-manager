@@ -12,6 +12,7 @@ def create_vms():
     # get hostnames from the file provided
     hosts = get_hostnames(args.hostnames)
     server_count = len(hosts)
+    print(f"Creating {server_count} virtual machines.")
 
     vms_created = False
     
@@ -38,10 +39,10 @@ def create_vms():
         else:
             print(f'{host} already exists in digitalocean. Aborted VM creation for this hostname.')
     
-    save_vm_info(server_count)
+    save_vm_info(server_count, hosts)
 
     
-def save_vm_info(server_count):
+def save_vm_info(server_count, new_hosts):
     # wait for 5 seconds before pinging digitalocean for newly created servers
     print('Waiting for 5 seconds before querying info from newly created VMs on digitalocean...')
     sleep(5)
@@ -59,8 +60,8 @@ def save_vm_info(server_count):
             print('Please check on digitalocean dashboard.')
             exit()
         else:
-            servers = get_vm_info()
-            if len(servers) == server_count:
+            servers = get_vm_info(new_hosts)
+            if len(servers) >= server_count:
                 print('Info for newly created VMs retrieved successfully.')
                 # write the server info to output json file
                 print('Saving VM info to output file...')
@@ -72,20 +73,29 @@ def save_vm_info(server_count):
                 sleep(5)
 
 
-def get_vm_info():
+def get_vm_info(new_hosts):
     vm_info = sh.doctl.compute.droplet.ls("-o", "json")
     servers = []
     if vm_info.stdout.decode('utf-8') != 'null':
         vms = json.loads(vm_info.stdout.decode('utf-8'))
+        hostnames = get_hostlist(new_hosts)
         for vm in vms:
-            server = {}
-            server['hostname'] = vm['name']
-            networks = vm['networks']['v4']
-            for network in networks:
-                server[network['type']] = network['ip_address']
-            server['role'] = vm['tags'][0]
-            servers.append(server)
+            if vm['name'] in hostnames:
+                server = {}
+                server['hostname'] = vm['name']
+                networks = vm['networks']['v4']
+                for network in networks:
+                    server[network['type']] = network['ip_address']
+                server['role'] = vm['tags'][0]
+                servers.append(server)
     return servers
+
+
+def get_hostlist(new_hosts):
+    retinfo = []
+    for host in new_hosts:
+        retinfo.append(host[0])
+    return retinfo
 
 
 def get_vm_hostname():
@@ -111,10 +121,18 @@ def save_server_info(servers):
     # check if the "output" directory exists
     if not os.path.isdir("output"):
         os.mkdir("output")
-
+    # create JSON output
     with open('output/vms.json', 'w') as vmf:
         json.dump(servers, vmf, indent=2)
-
+    # create tab delimited file with hostname and public ip address list
+    with open('output/vms_ip_host.txt', 'w') as vmf:
+        for server in servers:
+            vmf.write(f'{server["hostname"]}\t{server["public"]}\n')
+    # create file with list of public IPs
+    with open('output/vm_ips.txt', 'w') as vmf:
+        for server in servers:
+            vmf.write(f'{server["public"]}\n')
+            
 
 def parse_arguments():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
