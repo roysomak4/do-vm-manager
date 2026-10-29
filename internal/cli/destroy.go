@@ -12,6 +12,7 @@ import (
 
 	"github.com/roysomak4/do-vm-manager/internal/engine"
 	"github.com/roysomak4/do-vm-manager/internal/spec"
+	"github.com/roysomak4/do-vm-manager/internal/tui"
 )
 
 const destroyTimeout = 5 * time.Minute
@@ -115,7 +116,35 @@ func runDestroy(cmd *cobra.Command, g *globalFlags, f *destroyFlags, args []stri
 	// fully reported rather than unknown.
 	delCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout)
 	defer cancel()
-	results := engine.Destroy(delCtx, client, targets, 0, newTextReporter(cmd.ErrOrStderr()))
+	var results []engine.DestroyResult
+	if g.useTUI(cmd) {
+		rows := make([]tui.Row, len(targets))
+		for i, t := range targets {
+			rows[i] = tui.Row{Name: t.Droplet.Name, DropletID: t.Droplet.ID, State: tui.Deleting}
+			rows[i].IP, _ = t.Droplet.PublicIPv4()
+			if t.Orphan {
+				rows[i].Role = "orphan"
+			}
+		}
+		err = tui.Run(ctx, tui.Config{
+			Title:      fmt.Sprintf("Destroying cluster %s", name),
+			Rows:       rows,
+			CancelHint: "deletions already requested will finish",
+		}, func(_ context.Context, report engine.Reporter) []tui.Row {
+			results = engine.Destroy(delCtx, client, targets, 0, report)
+			return nil // the per-droplet events already set every row's final state
+		})
+		if err != nil {
+			return err
+		}
+		for _, r := range results {
+			if r.Err != nil {
+				fmt.Fprintf(out, "%s (droplet %d): %v\n", r.Target.Droplet.Name, r.Target.Droplet.ID, r.Err)
+			}
+		}
+	} else {
+		results = engine.Destroy(delCtx, client, targets, 0, newTextReporter(cmd.ErrOrStderr()))
+	}
 
 	var failed int
 	for _, r := range results {

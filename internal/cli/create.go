@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/roysomak4/do-vm-manager/internal/engine"
 	"github.com/roysomak4/do-vm-manager/internal/output"
 	"github.com/roysomak4/do-vm-manager/internal/spec"
+	"github.com/roysomak4/do-vm-manager/internal/tui"
 )
 
 type createFlags struct {
@@ -95,24 +97,43 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 		}
 	}
 
-	res, err := engine.Run(ctx, client, plan, engine.Options{
-		WaitTimeout: f.waitTimeout,
-		Rollback:    f.rollback,
-		Reporter:    newTextReporter(cmd.ErrOrStderr()),
-	})
-	if err != nil {
-		return err
+	opts := engine.Options{WaitTimeout: f.waitTimeout, Rollback: f.rollback}
+	var res *engine.Result
+	if g.useTUI(cmd) {
+		cancelHint := "droplets already created are kept; run create again to finish"
+		if f.rollback {
+			cancelHint = "rolling back droplets created by this run"
+		}
+		err = tui.Run(ctx, tui.Config{
+			Title:      fmt.Sprintf("Creating cluster %s in %s", s.Name, s.Region),
+			Rows:       createRows(plan),
+			CancelHint: cancelHint,
+		}, func(ctx context.Context, report engine.Reporter) []tui.Row {
+			opts.Reporter = report
+			res, _ = engine.Run(ctx, client, plan, opts)
+			return resultRows(res)
+		})
+		if err != nil {
+			return err
+		}
+		printFailures(out, res)
+	} else {
+		opts.Reporter = newTextReporter(cmd.ErrOrStderr())
+		if res, err = engine.Run(ctx, client, plan, opts); err != nil {
+			return err
+		}
+		fmt.Fprintln(out)
+		printResult(out, res)
 	}
 
-	fmt.Fprintln(out)
-	printResult(out, res)
 	if !res.RolledBack {
 		n, err := output.Write(f.outputDir, res)
 		if err != nil {
 			return fmt.Errorf("write output files: %w", err)
 		}
 		if n > 0 {
-			fmt.Fprintf(out, "\nWrote %d host(s) to %s/{%s,%s,%s}\n", n, f.outputDir, output.VMsJSON, output.IPHostFile, output.IPsFile)
+			fmt.Fprintf(out, "\nWrote %d host(s) to %s/{%s,%s,%s,%s}\n", n, f.outputDir,
+				output.VMsJSON, output.IPHostFile, output.IPsFile, output.Inventory)
 		}
 	}
 
@@ -121,10 +142,70 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 		return nil
 	case res.RolledBack:
 		return errors.New("create failed; droplets created by this run were rolled back")
-	case ctx.Err() != nil:
+	case res.Canceled():
 		return errors.New("interrupted; run create again to finish")
 	default:
 		return errors.New("some hosts are not ready; run create again to retry them")
+	}
+}
+
+// createRows is the dashboard's starting state for a plan.
+func createRows(p *engine.Plan) []tui.Row {
+	existing := map[string]engine.Existing{}
+	for _, e := range p.Existing {
+		existing[e.Host.Name] = e
+	}
+	var rows []tui.Row
+	for _, h := range p.Spec.Hosts() {
+		r := tui.Row{Name: h.Name, Role: h.Role, State: tui.Queued}
+		if e, ok := existing[h.Name]; ok {
+			r.DropletID = e.Droplet.ID
+			r.IP, _ = e.Droplet.PublicIPv4()
+			r.Detail = strings.Join(e.Drift, "; ")
+			r.State = tui.Existing
+			if e.Droplet.Status == "new" {
+				r.State = tui.Provisioning
+			}
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+// resultRows converts the engine's final result to dashboard rows.
+func resultRows(res *engine.Result) []tui.Row {
+	states := map[engine.Status]tui.State{
+		engine.StatusPending:    tui.Queued,
+		engine.StatusReady:      tui.Ready,
+		engine.StatusFailed:     tui.Failed,
+		engine.StatusTimedOut:   tui.TimedOut,
+		engine.StatusCanceled:   tui.Canceled,
+		engine.StatusRolledBack: tui.RolledBack,
+	}
+	var rows []tui.Row
+	for _, h := range res.Hosts {
+		r := tui.Row{Name: h.Host.Name, Role: h.Host.Role, State: states[h.Status]}
+		if h.Status == engine.StatusReady && !h.Created {
+			r.State = tui.Existing
+		}
+		if d := h.Droplet; d != nil {
+			r.DropletID = d.ID
+			r.IP, _ = d.PublicIPv4()
+		}
+		if h.Err != nil {
+			r.Detail = h.Err.Error()
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+// printFailures prints full error messages, which the dashboard truncates.
+func printFailures(w io.Writer, res *engine.Result) {
+	for _, h := range res.Hosts {
+		if h.Err != nil {
+			fmt.Fprintf(w, "%s: %v\n", h.Host.Name, h.Err)
+		}
 	}
 }
 
@@ -181,34 +262,8 @@ func printResult(w io.Writer, res *engine.Result) {
 func newTextReporter(w io.Writer) engine.Reporter {
 	var mu sync.Mutex
 	return func(e engine.Event) {
-		var msg string
-		hosts := strings.Join(e.Hosts, ", ")
-		switch e.Kind {
-		case engine.EventCreateRequested:
-			msg = fmt.Sprintf("creating %s (%s)", hosts, e.Detail)
-		case engine.EventCreateRetry:
-			msg = fmt.Sprintf("create failed for %s, checking for partial creation then retrying: %v", hosts, e.Err)
-		case engine.EventCreated:
-			msg = fmt.Sprintf("%s: droplet %d created, waiting for it to become active", hosts, e.DropletID)
-		case engine.EventReady:
-			msg = fmt.Sprintf("%s: ready at %s", hosts, e.Detail)
-		case engine.EventFailed:
-			msg = fmt.Sprintf("%s: FAILED: %v", hosts, e.Err)
-		case engine.EventWarning:
-			msg = "warning: " + e.Detail
-			if hosts != "" {
-				msg = fmt.Sprintf("warning: %s: %s", hosts, e.Detail)
-			}
-			if e.Err != nil {
-				msg += fmt.Sprintf(": %v", e.Err)
-			}
-		case engine.EventRollback:
-			msg = "rolling back: " + e.Detail
-		case engine.EventDeleted:
-			msg = fmt.Sprintf("%s: droplet %d deleted", hosts, e.DropletID)
-		}
 		mu.Lock()
 		defer mu.Unlock()
-		fmt.Fprintf(w, "%s  %s\n", time.Now().Format("15:04:05"), msg)
+		fmt.Fprintf(w, "%s  %s\n", time.Now().Format("15:04:05"), e)
 	}
 }

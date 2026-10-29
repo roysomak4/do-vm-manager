@@ -1,0 +1,36 @@
+# Release builds for dovm. Pushing a v* tag runs this via .github/workflows/release.yml.
+# Try it locally with: goreleaser release --snapshot --clean
+version: 2
+project_name: dovm
+
+builds:
+  - main: ./cmd/dovm
+    binary: dovm
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/roysomak4/do-vm-manager/internal/cli.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - examples/*
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

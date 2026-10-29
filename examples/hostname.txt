@@ -1,0 +1,6 @@
+# Host list in the format of the original Python script: hostname<TAB>role.
+# Convert it to a cluster spec with:
+#   dovm import examples/hostname.txt --name example -o -
+cp01	manager
+vm01	worker
+vm02	worker

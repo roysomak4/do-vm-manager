@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,19 +18,19 @@ type Spec struct {
 	Name       string          `yaml:"name"`
 	Region     string          `yaml:"region"`
 	Image      string          `yaml:"image"`
-	SSHKeys    []string        `yaml:"ssh_keys"`
-	Tags       []string        `yaml:"tags"`
-	Monitoring bool            `yaml:"monitoring"`
-	IPv6       bool            `yaml:"ipv6"`
-	VPCUUID    string          `yaml:"vpc_uuid"`
+	SSHKeys    []string        `yaml:"ssh_keys,omitempty"`
+	Tags       []string        `yaml:"tags,omitempty"`
+	Monitoring bool            `yaml:"monitoring,omitempty"`
+	IPv6       bool            `yaml:"ipv6,omitempty"`
+	VPCUUID    string          `yaml:"vpc_uuid,omitempty"`
 	Roles      map[string]Role `yaml:"roles"`
 }
 
 // Role groups hosts that share a droplet size and extra tags.
 type Role struct {
 	Size  string   `yaml:"size"`
-	Hosts []string `yaml:"hosts"`
-	Tags  []string `yaml:"tags"`
+	Hosts []string `yaml:"hosts,flow"`
+	Tags  []string `yaml:"tags,omitempty,flow"`
 }
 
 // Host is one droplet to create, flattened from its role.
@@ -120,6 +121,31 @@ func (s *Spec) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ValidHostname reports whether name is a valid droplet name.
+func ValidHostname(name string) bool { return hostnameRe.MatchString(name) }
+
+// ValidTag reports whether t is a valid DigitalOcean tag.
+func ValidTag(t string) bool { return tagRe.MatchString(t) }
+
+// Marshal renders the spec as YAML with a short header comment.
+func (s *Spec) Marshal(header string) ([]byte, error) {
+	var buf bytes.Buffer
+	for _, line := range strings.Split(strings.TrimSpace(header), "\n") {
+		if line != "" {
+			fmt.Fprintf(&buf, "# %s\n", line)
+		}
+	}
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(s); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // ValidateName checks a cluster name.

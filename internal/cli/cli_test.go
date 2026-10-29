@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/roysomak4/do-vm-manager/internal/spec"
 )
 
 // fakeDO serves the droplet list and delete endpoints from memory.
@@ -296,5 +298,43 @@ func TestCreateDryRunReportsOrphanAndConflict(t *testing.T) {
 	}
 	if !strings.Contains(out, "droplet 3 (old01) is tagged dovm:demo but not in the spec") {
 		t.Errorf("missing orphan warning:\n%s", out)
+	}
+}
+
+func TestImport(t *testing.T) {
+	dir := t.TempDir()
+	hostFile := filepath.Join(dir, "hostname.txt")
+	if err := os.WriteFile(hostFile, []byte("cp01\tmanager\nvm01\tworker\nvm02\tworker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specFile := filepath.Join(dir, "cluster.yaml")
+	args := []string{"import", hostFile, "-o", specFile, "--name", "k8s", "--size", "s-4vcpu-8gb",
+		"--role-size", "manager=s-2vcpu-4gb", "--ssh-keys", "123,aa:bb", "--tags", "lab"}
+	out, err := execute("", "", args...)
+	if err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "3 host(s): manager: 1 (s-2vcpu-4gb), worker: 2 (s-4vcpu-8gb)") {
+		t.Errorf("output:\n%s", out)
+	}
+
+	s, err := spec.Load(specFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Name != "k8s" || s.Region != "nyc3" || !s.Monitoring || !slices.Equal(s.SSHKeys, []string{"123", "aa:bb"}) ||
+		!slices.Equal(s.Roles["worker"].Hosts, []string{"vm01", "vm02"}) || s.Roles["manager"].Size != "s-2vcpu-4gb" {
+		t.Errorf("spec = %+v", s)
+	}
+
+	if _, err := execute("", "", args...); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("second import without --force: %v", err)
+	}
+	if _, err := execute("", "", "import", hostFile, "-o", "-", "--name", "k8s", "--role-size", "db=s-1"); err == nil ||
+		!strings.Contains(err.Error(), `no hosts in`) {
+		t.Errorf("unknown --role-size role: %v", err)
+	}
+	if _, err := execute("", "", "import", hostFile, "-o", "-"); err == nil || !strings.Contains(err.Error(), "name") {
+		t.Errorf("missing --name: %v", err)
 	}
 }

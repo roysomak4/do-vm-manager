@@ -92,6 +92,16 @@ type Result struct {
 	RolledBack bool
 }
 
+// Canceled reports whether the run was interrupted before every host finished.
+func (r *Result) Canceled() bool {
+	for _, h := range r.Hosts {
+		if h.Status == StatusCanceled {
+			return true
+		}
+	}
+	return false
+}
+
 // OK reports whether every host is ready.
 func (r *Result) OK() bool {
 	for _, h := range r.Hosts {

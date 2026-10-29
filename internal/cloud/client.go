@@ -148,6 +148,11 @@ func (c *Client) SSHKeys(ctx context.Context) ([]godo.Key, error) {
 	return listAll(ctx, c.godo.Keys.List)
 }
 
+// DistributionImages lists the public OS images, such as Ubuntu and Debian.
+func (c *Client) DistributionImages(ctx context.Context) ([]godo.Image, error) {
+	return listAll(ctx, c.godo.Images.ListDistribution)
+}
+
 // Image looks up an image by numeric ID or slug. It returns nil, nil when the
 // image does not exist.
 func (c *Client) Image(ctx context.Context, ref string) (*godo.Image, error) {

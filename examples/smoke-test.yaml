@@ -1,0 +1,20 @@
+# A small, cheap cluster for trying dovm on a real account: 3 of the smallest
+# regular droplets, about $0.03/hour in total. See "Try it on your account"
+# in the README. Delete everything afterwards with:
+#   dovm destroy examples/smoke-test.yaml
+name: dovm-test
+region: nyc3
+image: ubuntu-24-04-x64
+# Add your SSH key IDs or fingerprints (doctl compute ssh-key list) so you can
+# log in as root. Without one, DigitalOcean emails a root password instead.
+ssh_keys: []
+tags: [dovm-test]
+monitoring: true
+
+roles:
+  manager:
+    size: s-1vcpu-1gb
+    hosts: [test-cp01]
+  worker:
+    size: s-1vcpu-1gb
+    hosts: [test-vm01, test-vm02]
