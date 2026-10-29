@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/digitalocean/godo"
 )
 
 func newTestClient(t *testing.T, h http.Handler) *Client {
@@ -138,5 +140,60 @@ func TestCatalog(t *testing.T) {
 	}
 	if len(cat.Regions) != 1 || len(cat.Sizes) != 1 || len(cat.SSHKeys) != 1 || cat.Image == nil || cat.Image.ID != 12345 {
 		t.Fatalf("catalog = %+v", cat)
+	}
+}
+
+func TestCreateIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"id":"server_error","message":"boom"}`)
+	}))
+
+	_, err := c.CreateDroplets(context.Background(), &godo.DropletMultiCreateRequest{Names: []string{"a"}})
+	if err == nil || !IsTransient(err) {
+		t.Fatalf("err = %v, want transient error", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("create sent %d times; a 5xx may already have created droplets", calls.Load())
+	}
+}
+
+func TestDeleteDropletTreatsNotFoundAsSuccess(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/v2/droplets/42" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"id":"not_found","message":"gone"}`)
+	}))
+	if err := c.DeleteDroplet(context.Background(), 42); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIsTransient(t *testing.T) {
+	apiErr := func(code int) error {
+		req, _ := http.NewRequest(http.MethodGet, "https://example.com", nil)
+		return &godo.ErrorResponse{Response: &http.Response{StatusCode: code, Request: req}}
+	}
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{apiErr(429), true},
+		{apiErr(503), true},
+		{apiErr(422), false},
+		{apiErr(404), false},
+		{fmt.Errorf("dial tcp: connection refused"), true},
+		{context.Canceled, false},
+		{fmt.Errorf("wrapped: %w", context.DeadlineExceeded), false},
+	}
+	for _, tc := range cases {
+		if got := IsTransient(tc.err); got != tc.want {
+			t.Errorf("IsTransient(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

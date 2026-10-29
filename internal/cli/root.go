@@ -26,7 +26,7 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.token, "token", "", "DigitalOcean API token (default: $DIGITALOCEAN_TOKEN, then doctl's config)")
 	root.PersistentFlags().DurationVar(&g.apiTimeout, "api-timeout", 30*time.Second, "timeout for each DigitalOcean API request attempt")
 
-	root.AddCommand(newValidateCmd(g))
+	root.AddCommand(newValidateCmd(g), newCreateCmd(g))
 	return root
 }
 

@@ -44,10 +44,13 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// Client is a DigitalOcean API client. 429 and 5xx responses are retried with
-// exponential backoff, honoring Retry-After.
+// Client is a DigitalOcean API client. Reads and deletes retry 429 and 5xx
+// responses with exponential backoff, honoring Retry-After. Creates are never
+// retried here: a 5xx may mean the droplets were created anyway, so the caller
+// must check what exists before trying again.
 type Client struct {
-	godo *godo.Client
+	godo   *godo.Client // retrying, for idempotent requests
+	create *godo.Client // non-retrying, for droplet creation
 }
 
 // New builds a client authenticated with token.
@@ -57,29 +60,32 @@ func New(token string, opts Options) (*Client, error) {
 	}
 	opts = opts.withDefaults()
 
-	// godo's retry layer requires the underlying client to use an oauth2 transport.
-	httpClient := oauth2.NewClient(context.Background(), oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token}))
-	httpClient.Timeout = opts.Timeout
+	newGodo := func(extra ...godo.ClientOpt) (*godo.Client, error) {
+		// godo's retry layer requires the underlying client to use an oauth2 transport.
+		httpClient := oauth2.NewClient(context.Background(), oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token}))
+		httpClient.Timeout = opts.Timeout
+		clientOpts := []godo.ClientOpt{godo.SetUserAgent(userAgent)}
+		if opts.BaseURL != "" {
+			clientOpts = append(clientOpts, godo.SetBaseURL(opts.BaseURL))
+		}
+		return godo.New(httpClient, append(clientOpts, extra...)...)
+	}
 
 	waitMin := opts.RetryWaitMin.Seconds()
 	waitMax := opts.RetryWaitMax.Seconds()
-	clientOpts := []godo.ClientOpt{
-		godo.SetUserAgent(userAgent),
-		godo.WithRetryAndBackoffs(godo.RetryConfig{
-			RetryMax:     opts.RetryMax,
-			RetryWaitMin: &waitMin,
-			RetryWaitMax: &waitMax,
-		}),
-	}
-	if opts.BaseURL != "" {
-		clientOpts = append(clientOpts, godo.SetBaseURL(opts.BaseURL))
-	}
-
-	g, err := godo.New(httpClient, clientOpts...)
+	retrying, err := newGodo(godo.WithRetryAndBackoffs(godo.RetryConfig{
+		RetryMax:     opts.RetryMax,
+		RetryWaitMin: &waitMin,
+		RetryWaitMax: &waitMax,
+	}))
 	if err != nil {
 		return nil, err
 	}
-	return &Client{godo: g}, nil
+	create, err := newGodo()
+	if err != nil {
+		return nil, err
+	}
+	return &Client{godo: retrying, create: create}, nil
 }
 
 // listAll follows pagination until the last page.
@@ -102,6 +108,29 @@ func listAll[T any](ctx context.Context, list func(context.Context, *godo.ListOp
 // Droplets lists every droplet in the account.
 func (c *Client) Droplets(ctx context.Context) ([]godo.Droplet, error) {
 	return listAll(ctx, c.godo.Droplets.List)
+}
+
+// DropletsByTag lists the droplets carrying tag.
+func (c *Client) DropletsByTag(ctx context.Context, tag string) ([]godo.Droplet, error) {
+	return listAll(ctx, func(ctx context.Context, opt *godo.ListOptions) ([]godo.Droplet, *godo.Response, error) {
+		return c.godo.Droplets.ListByTag(ctx, tag, opt)
+	})
+}
+
+// CreateDroplets creates up to 10 droplets in one request. It makes exactly one
+// attempt; see Client.
+func (c *Client) CreateDroplets(ctx context.Context, req *godo.DropletMultiCreateRequest) ([]godo.Droplet, error) {
+	droplets, _, err := c.create.Droplets.CreateMultiple(ctx, req)
+	return droplets, err
+}
+
+// DeleteDroplet deletes a droplet. Deleting one that is already gone succeeds.
+func (c *Client) DeleteDroplet(ctx context.Context, id int) error {
+	_, err := c.godo.Droplets.Delete(ctx, id)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // Regions lists every region.
@@ -160,6 +189,26 @@ func (c *Client) Catalog(ctx context.Context, image string) (*Catalog, error) {
 }
 
 func isNotFound(err error) bool {
+	return statusCode(err) == http.StatusNotFound
+}
+
+// statusCode returns the HTTP status of an API error, or 0 if err did not come
+// from an API response.
+func statusCode(err error) int {
 	var apiErr *godo.ErrorResponse
-	return errors.As(err, &apiErr) && apiErr.Response != nil && apiErr.Response.StatusCode == http.StatusNotFound
+	if errors.As(err, &apiErr) && apiErr.Response != nil {
+		return apiErr.Response.StatusCode
+	}
+	return 0
+}
+
+// IsTransient reports whether a failed request may succeed if repeated: rate
+// limiting, server errors, and network failures. Context cancellation is not
+// transient.
+func IsTransient(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	code := statusCode(err)
+	return code == 0 || code == http.StatusTooManyRequests || code >= 500
 }

@@ -9,6 +9,7 @@ import (
 )
 
 const validYAML = `
+name: demo
 region: nyc3
 image: ubuntu-24-04-x64
 ssh_keys: [3871344, "aa:bb:cc"]
@@ -49,7 +50,7 @@ func TestParseValid(t *testing.T) {
 }
 
 func TestParseRejectsUnknownField(t *testing.T) {
-	_, err := Parse([]byte("region: nyc3\nimage: x\nsize: oops\nroles: {w: {size: s, hosts: [a]}}\n"))
+	_, err := Parse([]byte("name: n\nregion: nyc3\nimage: x\nsize: oops\nroles: {w: {size: s, hosts: [a]}}\n"))
 	if err == nil || !strings.Contains(err.Error(), "size") {
 		t.Fatalf("expected unknown-field error, got %v", err)
 	}
@@ -69,6 +70,7 @@ func TestValidateReportsAllErrors(t *testing.T) {
 		t.Fatal("expected errors")
 	}
 	for _, want := range []string{
+		"name is required",
 		"region is required",
 		"image is required",
 		`tag "bad tag" is invalid`,
@@ -84,9 +86,22 @@ func TestValidateReportsAllErrors(t *testing.T) {
 }
 
 func TestValidateRequiresRoles(t *testing.T) {
-	err := (&Spec{Region: "nyc3", Image: "x"}).Validate()
+	err := (&Spec{Name: "n", Region: "nyc3", Image: "x"}).Validate()
 	if err == nil || !strings.Contains(err.Error(), "at least one role") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestInvalidName(t *testing.T) {
+	err := (&Spec{Name: "my cluster"}).Validate()
+	if err == nil || !strings.Contains(err.Error(), `name "my cluster" is invalid`) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestClusterTag(t *testing.T) {
+	if got := (&Spec{Name: "k8s-prod"}).ClusterTag(); got != "dovm:k8s-prod" {
+		t.Fatalf("ClusterTag = %q", got)
 	}
 }
 

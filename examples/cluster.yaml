@@ -1,5 +1,6 @@
 # Example dovm cluster spec. Validate it with:
 #   dovm validate examples/cluster.yaml
+name: example
 region: nyc3
 image: ubuntu-24-04-x64
 # SSH key IDs or fingerprints, from `doctl compute ssh-key list` or the DO dashboard.

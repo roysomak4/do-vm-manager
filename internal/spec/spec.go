@@ -14,6 +14,7 @@ import (
 
 // Spec is the desired set of droplets, as declared in a cluster YAML file.
 type Spec struct {
+	Name       string          `yaml:"name"`
 	Region     string          `yaml:"region"`
 	Image      string          `yaml:"image"`
 	SSHKeys    []string        `yaml:"ssh_keys"`
@@ -73,6 +74,12 @@ func Parse(data []byte) (*Spec, error) {
 // are reported together rather than stopping at the first.
 func (s *Spec) Validate() error {
 	var errs []error
+	switch {
+	case s.Name == "":
+		errs = append(errs, errors.New("name is required"))
+	case !tagRe.MatchString(s.ClusterTag()):
+		errs = append(errs, fmt.Errorf("name %q is invalid: use letters, digits, dashes, underscores or colons", s.Name))
+	}
 	if s.Region == "" {
 		errs = append(errs, errors.New("region is required"))
 	}
@@ -116,6 +123,12 @@ func (s *Spec) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ClusterTag is the tag dovm puts on every droplet it creates for this spec.
+// It marks ownership: only droplets carrying it are adopted or deleted.
+func (s *Spec) ClusterTag() string {
+	return "dovm:" + s.Name
 }
 
 // Hosts flattens roles into droplets, ordered by role name then declaration order.
