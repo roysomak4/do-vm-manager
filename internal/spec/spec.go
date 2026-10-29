@@ -74,11 +74,8 @@ func Parse(data []byte) (*Spec, error) {
 // are reported together rather than stopping at the first.
 func (s *Spec) Validate() error {
 	var errs []error
-	switch {
-	case s.Name == "":
-		errs = append(errs, errors.New("name is required"))
-	case !tagRe.MatchString(s.ClusterTag()):
-		errs = append(errs, fmt.Errorf("name %q is invalid: use letters, digits, dashes, underscores or colons", s.Name))
+	if err := ValidateName(s.Name); err != nil {
+		errs = append(errs, err)
 	}
 	if s.Region == "" {
 		errs = append(errs, errors.New("region is required"))
@@ -125,10 +122,29 @@ func (s *Spec) Validate() error {
 	return errors.Join(errs...)
 }
 
+// ValidateName checks a cluster name.
+func ValidateName(name string) error {
+	switch {
+	case name == "":
+		return errors.New("name is required")
+	case !tagRe.MatchString(ClusterTag(name)):
+		return fmt.Errorf("name %q is invalid: use letters, digits, dashes, underscores or colons", name)
+	}
+	return nil
+}
+
+// ClusterTag returns the tag dovm puts on droplets of the named cluster.
+func ClusterTag(name string) string {
+	return ClusterTagPrefix + name
+}
+
+// ClusterTagPrefix starts every cluster tag.
+const ClusterTagPrefix = "dovm:"
+
 // ClusterTag is the tag dovm puts on every droplet it creates for this spec.
 // It marks ownership: only droplets carrying it are adopted or deleted.
 func (s *Spec) ClusterTag() string {
-	return "dovm:" + s.Name
+	return ClusterTag(s.Name)
 }
 
 // Hosts flattens roles into droplets, ordered by role name then declaration order.

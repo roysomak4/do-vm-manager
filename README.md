@@ -2,8 +2,8 @@
 
 Create and manage DigitalOcean droplets from a declarative spec file.
 
-> **Status:** under active rewrite in Go. Spec validation and droplet creation
-> work; status, destroy and the terminal UI are coming in later phases.
+> **Status:** under active rewrite in Go. `validate`, `create`, `status`,
+> `list` and `destroy` work; the terminal UI is coming next.
 
 ## Install
 
@@ -103,6 +103,35 @@ are handled more carefully: a 5xx can mean the droplets were created anyway, so
 dovm checks which ones now exist and only retries the rest. If that check
 itself fails, it stops rather than risk creating duplicates.
 
+### Checking a cluster
+
+```sh
+dovm status examples/cluster.yaml          # spec vs. reality, one row per host
+dovm list                                  # every dovm-managed droplet, all clusters
+dovm list --cluster example -o json
+```
+
+`status` shows each host as `exists` (with droplet status, IPs and any size or
+region drift), `missing` or `conflict`, and lists **orphans**: droplets tagged
+for the cluster whose host has been removed from the spec. Both commands take
+`-o json` for scripting.
+
+### Destroying droplets
+
+```sh
+dovm destroy examples/cluster.yaml --dry-run          # show what would be deleted
+dovm destroy examples/cluster.yaml                    # delete the spec's hosts
+dovm destroy examples/cluster.yaml --host vm02        # delete just one host
+dovm destroy examples/cluster.yaml --include-orphans  # also delete orphans
+dovm destroy --name example                           # no spec: every droplet tagged dovm:example
+```
+
+Only droplets tagged `dovm:<name>` are ever deleted, so a droplet you made by
+hand with the same name as a host is safe. You are asked to type the cluster
+name to confirm; `--yes` skips this, and without a terminal destroy refuses
+unless `--yes` is given. Inventory files in `output/` are not changed by
+destroy.
+
 ## Development
 
 ```sh
@@ -118,5 +147,5 @@ Layout:
 | `internal/cli` | command definitions |
 | `internal/cloud` | DigitalOcean API client: auth, retries, pagination |
 | `internal/spec` | spec parsing, static validation, live checks against the account |
-| `internal/engine` | plan (compare spec with existing droplets), create, wait, rollback |
+| `internal/engine` | plan (compare spec with existing droplets), create, wait, rollback, destroy |
 | `internal/output` | inventory files |

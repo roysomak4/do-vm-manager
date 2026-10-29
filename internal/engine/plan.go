@@ -27,6 +27,7 @@ type Plan struct {
 	Create    []spec.Host
 	Existing  []Existing
 	Conflicts []Conflict
+	Orphans   []godo.Droplet // carry the cluster tag but are not named in the spec
 }
 
 // Existing is a host whose droplet already exists and carries the spec's cluster tag.
@@ -46,6 +47,8 @@ type Conflict struct {
 //   - no droplet with that name: create it
 //   - exactly one, carrying the cluster tag: adopt it as existing
 //   - any droplet with that name lacking the tag, or several tagged: conflict
+//
+// Tagged droplets whose name is not in the spec are reported as orphans.
 func BuildPlan(ctx context.Context, api API, s *spec.Spec) (*Plan, error) {
 	all, err := api.Droplets(ctx)
 	if err != nil {
@@ -79,6 +82,16 @@ func BuildPlan(ctx context.Context, api API, s *spec.Spec) (*Plan, error) {
 			p.Existing = append(p.Existing, Existing{Host: h, Droplet: owned[0], Drift: drift(s, h, owned[0])})
 		default:
 			p.Create = append(p.Create, h)
+		}
+	}
+
+	inSpec := map[string]bool{}
+	for _, h := range s.Hosts() {
+		inSpec[h.Name] = true
+	}
+	for _, d := range all {
+		if !inSpec[d.Name] && slices.Contains(d.Tags, tag) {
+			p.Orphans = append(p.Orphans, d)
 		}
 	}
 	return p, nil

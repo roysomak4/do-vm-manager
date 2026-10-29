@@ -30,6 +30,7 @@ type fakeAPI struct {
 	vanish       map[string]bool // names removed right after creation
 	listByTagErr error
 	deleted      []int
+	deleteErr    map[int]error
 	onPoll       func() // called on each DropletsByTag
 }
 
@@ -130,6 +131,9 @@ func (f *fakeAPI) CreateDroplets(ctx context.Context, req *godo.DropletMultiCrea
 func (f *fakeAPI) DeleteDroplet(ctx context.Context, id int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.deleteErr[id]; err != nil {
+		return err
+	}
 	f.deleted = append(f.deleted, id)
 	f.droplets = slices.DeleteFunc(f.droplets, func(d *godo.Droplet) bool { return d.ID == id })
 	return nil

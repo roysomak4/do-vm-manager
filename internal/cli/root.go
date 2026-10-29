@@ -12,6 +12,7 @@ import (
 type globalFlags struct {
 	token      string
 	apiTimeout time.Duration
+	apiURL     string
 }
 
 // NewRootCmd builds the dovm command tree.
@@ -26,7 +27,10 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.token, "token", "", "DigitalOcean API token (default: $DIGITALOCEAN_TOKEN, then doctl's config)")
 	root.PersistentFlags().DurationVar(&g.apiTimeout, "api-timeout", 30*time.Second, "timeout for each DigitalOcean API request attempt")
 
-	root.AddCommand(newValidateCmd(g), newCreateCmd(g))
+	root.PersistentFlags().StringVar(&g.apiURL, "api-url", "", "DigitalOcean API base URL")
+	_ = root.PersistentFlags().MarkHidden("api-url") // for tests
+
+	root.AddCommand(newValidateCmd(g), newCreateCmd(g), newStatusCmd(g), newListCmd(g), newDestroyCmd(g))
 	return root
 }
 
@@ -35,5 +39,5 @@ func (g *globalFlags) client() (*cloud.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cloud.New(token, cloud.Options{Timeout: g.apiTimeout})
+	return cloud.New(token, cloud.Options{Timeout: g.apiTimeout, BaseURL: g.apiURL})
 }

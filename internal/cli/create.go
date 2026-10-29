@@ -1,11 +1,9 @@
 package cli
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -85,11 +83,14 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 		return nil
 	}
 	if len(plan.Create) > 0 && !f.yes {
-		ok, err := confirm(cmd, fmt.Sprintf("Create %d droplet(s)?", len(plan.Create)))
+		answer, err := prompt(cmd, fmt.Sprintf("Create %d droplet(s)? [y/N]", len(plan.Create)))
+		if errors.Is(err, errNotInteractive) {
+			return errors.New("refusing to create droplets without confirmation; pass --yes when running non-interactively")
+		}
 		if err != nil {
 			return err
 		}
-		if !ok {
+		if a := strings.ToLower(answer); a != "y" && a != "yes" {
 			return errors.New("aborted")
 		}
 	}
@@ -148,6 +149,10 @@ func printPlan(w io.Writer, p *engine.Plan) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", h.Name, h.Role, h.Size, action[h.Name])
 	}
 	tw.Flush()
+	for _, d := range p.Orphans {
+		fmt.Fprintf(w, "warning: droplet %d (%s) is tagged %s but not in the spec; `dovm destroy --include-orphans` removes it\n",
+			d.ID, d.Name, p.Spec.ClusterTag())
+	}
 }
 
 func printResult(w io.Writer, res *engine.Result) {
@@ -170,20 +175,6 @@ func printResult(w io.Writer, res *engine.Result) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", h.Host.Name, h.Host.Role, result, id, pub, priv, errMsg)
 	}
 	tw.Flush()
-}
-
-// confirm asks a yes/no question. It refuses to guess when stdin is not a terminal.
-func confirm(cmd *cobra.Command, question string) (bool, error) {
-	if fi, err := os.Stdin.Stat(); cmd.InOrStdin() == os.Stdin && (err != nil || fi.Mode()&os.ModeCharDevice == 0) {
-		return false, errors.New("refusing to create droplets without confirmation; pass --yes when running non-interactively")
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N] ", question)
-	answer, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	return answer == "y" || answer == "yes", nil
 }
 
 // newTextReporter prints one timestamped line per progress event.

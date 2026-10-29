@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -395,25 +397,16 @@ func (r *runner) rollback(ctx context.Context) {
 		}
 	}
 
-	var mu sync.Mutex
-	var g errgroup.Group
-	g.SetLimit(r.opts.Concurrency)
-	for id, hr := range toDelete {
-		g.Go(func() error {
-			err := r.api.DeleteDroplet(ctx, id)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				hr.Err = errors.Join(hr.Err, fmt.Errorf("rollback: delete droplet %d: %w", id, err))
-				r.emit(Event{Kind: EventFailed, Hosts: []string{hr.Host.Name}, DropletID: id, Err: err, Detail: "rollback delete failed"})
-				return nil
-			}
-			hr.Status = StatusRolledBack
-			r.emit(Event{Kind: EventDeleted, Hosts: []string{hr.Host.Name}, DropletID: id})
-			return nil
-		})
-	}
-	_ = g.Wait()
+	deleteAll(ctx, r.api, slices.Collect(maps.Keys(toDelete)), r.opts.Concurrency, func(id int, err error) {
+		hr := toDelete[id]
+		if err != nil {
+			hr.Err = errors.Join(hr.Err, fmt.Errorf("rollback: delete droplet %d: %w", id, err))
+			r.emit(Event{Kind: EventFailed, Hosts: []string{hr.Host.Name}, DropletID: id, Err: err, Detail: "rollback delete failed"})
+			return
+		}
+		hr.Status = StatusRolledBack
+		r.emit(Event{Kind: EventDeleted, Hosts: []string{hr.Host.Name}, DropletID: id})
+	})
 }
 
 func names(hosts []spec.Host) []string {
