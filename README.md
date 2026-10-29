@@ -1,52 +1,79 @@
-# Digitalocean VM management script using doctl tool
+# dovm
 
-This script automates creation of droplets on digitalocean cloud platform.
+Create and manage DigitalOcean droplets from a declarative spec file.
 
-Requirements
+> **Status:** under active rewrite in Go. Phase 1 (API client and spec
+> validation) is done; droplet creation, status, destroy and the terminal UI
+> are coming in later phases.
 
-1. Linux or Macos
-2. `doctl` CLI tool provided by digitalocean should be installed
-3. `doctl` should be authenticated to access the digitalocean resources for a given account. Account can be authenticated using
+## Install
 
-```
-doctl auth init -t <Access token from digitalocean>
-```
+Requires Go 1.27+.
 
-4. `sh` python package is required. It can be installed using `pip install -U sh`.
-5. A tab delimited file with list of hostnames and roles. An example of the input file
-
-```
-# hostname.txt
-vm01    worker
-vm02    worker
+```sh
+go install github.com/roysomak4/do-vm-manager/cmd/dovm@latest
+# or, from a checkout
+go build -o dovm ./cmd/dovm
 ```
 
-The acceptable value for roles are `worker` and `manager`. These keywords are mainly used for creating VMS for high availability kubernetes clusters. For general usage, `worker` should be used for the role.
+## Authentication
+
+dovm talks to the DigitalOcean API directly; `doctl` is not required. The API
+token is taken from the first of:
+
+1. `--token` flag
+2. `DIGITALOCEAN_TOKEN` or `DIGITALOCEAN_ACCESS_TOKEN` environment variable
+3. doctl's config file for its current auth context, if you have run `doctl auth init`
+
+## Cluster spec
+
+Droplets are declared in a YAML file. Each role has its own size and list of
+hostnames, and every droplet is tagged with its role name plus any tags you
+list. See [`examples/cluster.yaml`](examples/cluster.yaml):
+
+```yaml
+region: nyc3
+image: ubuntu-24-04-x64
+ssh_keys: [3871344, "3b:16:bf:..."]   # key IDs or fingerprints
+tags: [example]
+monitoring: true
+roles:
+  manager:
+    size: s-2vcpu-4gb
+    hosts: [cp01, cp02, cp03]
+  worker:
+    size: s-4vcpu-8gb
+    hosts: [vm01, vm02]
+```
+
+Unknown fields are rejected, so typos fail loudly.
 
 ## Usage
 
-Full usage instructions can be found by simply running the script without any arguments
-
-```
-$ python3 create_vm.py
-usage: create_vm.py [-h] [--image IMAGE] [--cp-size CP_SIZE] [--worker-size WORKER_SIZE] [--region REGION]
-                    [--tag-names TAG_NAMES] [--ssh-keys SSH_KEYS]
-                    [--enable-private-networking [ENABLE_PRIVATE_NETWORKING]]
-                    [--enable-monitoring [ENABLE_MONITORING]]
-                    hostnames
-create_vm.py: error: the following arguments are required: hostnames
+```sh
+dovm validate examples/cluster.yaml
 ```
 
-Example command
+`validate` checks the spec, then confirms the region, sizes, image and SSH keys
+exist in your account and that each size is offered in the chosen region. It
+prints the droplets that would be created and an estimated cost. Use
+`--offline` to skip the API checks.
 
+API requests are retried with exponential backoff on rate limiting (429) and
+server errors (5xx), honoring `Retry-After`.
+
+## Development
+
+```sh
+go test -race ./...
+go vet ./...
 ```
-python3 create_vm.py hosts/hostname.txt --image ubuntu-20-04-x64 --worker-size s-4vcpu-8gb-intel --region nyc3 --tag-names example --ssh-keys 3871344,9918291
-```
 
-When the program runs successfully, three output files are generates under `output` folder
+Layout:
 
-1. `vms.json`
-2. `vms_ip_host.txt`
-3. `vm_ips.txt`
-
-These outputs are relevant for different downstream usages.
+| Path | Purpose |
+|---|---|
+| `cmd/dovm` | entry point |
+| `internal/cli` | command definitions |
+| `internal/cloud` | DigitalOcean API client: auth, retries, pagination |
+| `internal/spec` | spec parsing, static validation, live checks against the account |

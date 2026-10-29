@@ -1,0 +1,20 @@
+# Example dovm cluster spec. Validate it with:
+#   dovm validate examples/cluster.yaml
+region: nyc3
+image: ubuntu-24-04-x64
+# SSH key IDs or fingerprints, from `doctl compute ssh-key list` or the DO dashboard.
+ssh_keys: []
+# Tags applied to every droplet. Each droplet is also tagged with its role name.
+tags: [example]
+monitoring: true
+ipv6: false
+# Optional; droplets join the region's default VPC when omitted.
+# vpc_uuid: 00000000-0000-0000-0000-000000000000
+
+roles:
+  manager:
+    size: s-2vcpu-4gb
+    hosts: [cp01, cp02, cp03]
+  worker:
+    size: s-4vcpu-8gb
+    hosts: [vm01, vm02]
