@@ -11,6 +11,8 @@ monitoring: true
 ipv6: false
 # Optional; droplets join the region's default VPC when omitted.
 # vpc_uuid: 00000000-0000-0000-0000-000000000000
+# Optional DigitalOcean project, by name or ID; the default project when omitted.
+# project: My Project
 
 roles:
   manager:

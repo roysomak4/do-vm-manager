@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/digitalocean/godo"
 	"github.com/spf13/cobra"
 
 	"github.com/roysomak4/do-vm-manager/internal/spec"
@@ -36,7 +37,7 @@ func newValidateCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cat, err := client.Catalog(cmd.Context(), s.Image)
+			cat, err := client.Catalog(cmd.Context(), s.Image, s.Project != "")
 			if err != nil {
 				return fmt.Errorf("fetch account data: %w", err)
 			}
@@ -46,6 +47,10 @@ func newValidateCmd(g *globalFlags) *cobra.Command {
 			}
 			fmt.Fprintf(out, "\nSpec is valid. %d droplets, estimated $%.2f/month ($%.4f/hour).\n",
 				est.Droplets, est.MonthlyPrice, est.HourlyPrice)
+			if s.Project != "" {
+				p, _ := spec.FindProject(cat.Projects, s.Project)
+				fmt.Fprintf(out, "Droplets go into project %s.\n", projectLabel(p))
+			}
 			return nil
 		},
 	}
@@ -60,6 +65,14 @@ func printHosts(w io.Writer, s *spec.Spec) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", h.Name, h.Role, h.Size, strings.Join(h.Tags, ","))
 	}
 	tw.Flush()
+}
+
+// projectLabel names a project, noting when it is the account's default.
+func projectLabel(p *godo.Project) string {
+	if p.IsDefault {
+		return fmt.Sprintf("%q (the default project)", p.Name)
+	}
+	return fmt.Sprintf("%q", p.Name)
 }
 
 // validationFailed formats joined errors as a bulleted list.

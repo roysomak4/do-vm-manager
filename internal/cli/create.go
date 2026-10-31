@@ -61,7 +61,7 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 	if err != nil {
 		return err
 	}
-	cat, err := client.Catalog(ctx, s.Image)
+	cat, err := client.Catalog(ctx, s.Image, s.Project != "")
 	if err != nil {
 		return fmt.Errorf("fetch account data: %w", err)
 	}
@@ -73,14 +73,23 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 	if err != nil {
 		return err
 	}
+	if s.Project != "" {
+		project, _ := spec.FindProject(cat.Projects, s.Project) // found, or Check would have failed
+		if err := plan.UseProject(ctx, client, project); err != nil {
+			return err
+		}
+	}
 
 	printPlan(out, plan)
 	if err := plan.Err(); err != nil {
 		lines := strings.Split(err.Error(), "\n")
 		return fmt.Errorf("cannot proceed, %d host(s) conflict with existing droplets:\n  - %s", len(lines), strings.Join(lines, "\n  - "))
 	}
-	fmt.Fprintf(out, "\n%d to create, %d already exist. Cluster total: $%.2f/month.\n",
-		len(plan.Create), len(plan.Existing), est.MonthlyPrice)
+	fmt.Fprintf(out, "\n%d to create, %d already exist", len(plan.Create), len(plan.Existing))
+	if plan.Project != nil {
+		fmt.Fprintf(out, ", %d to move into project %s", len(plan.ToMove()), projectLabel(plan.Project))
+	}
+	fmt.Fprintf(out, ". Cluster total: $%.2f/month.\n", est.MonthlyPrice)
 	if f.dryRun {
 		return nil
 	}
@@ -105,7 +114,7 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 			cancelHint = "rolling back droplets created by this run"
 		}
 		err = tui.Run(ctx, tui.Config{
-			Title:      fmt.Sprintf("Creating cluster %s in %s", s.Name, s.Region),
+			Title:      createTitle(plan),
 			Rows:       createRows(plan),
 			CancelHint: cancelHint,
 		}, func(ctx context.Context, report engine.Reporter) []tui.Row {
@@ -124,6 +133,9 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 		}
 		fmt.Fprintln(out)
 		printResult(out, res)
+	}
+	if res.ProjectErr != nil {
+		fmt.Fprintf(out, "\nwarning: %v\nThe droplets work; run create again to retry the move.\n", res.ProjectErr)
 	}
 
 	if !res.RolledBack {
@@ -219,6 +231,9 @@ func printPlan(w io.Writer, p *engine.Plan) {
 		if len(e.Drift) > 0 {
 			a += "; " + strings.Join(e.Drift, "; ")
 		}
+		if e.OutsideProject {
+			a += "; move to project " + p.Project.Name
+		}
 		action[e.Host.Name] = a
 	}
 	for _, c := range p.Conflicts {
@@ -266,4 +281,12 @@ func newTextReporter(w io.Writer) engine.Reporter {
 		defer mu.Unlock()
 		fmt.Fprintf(w, "%s  %s\n", time.Now().Format("15:04:05"), e)
 	}
+}
+
+func createTitle(p *engine.Plan) string {
+	title := fmt.Sprintf("Creating cluster %s in %s", p.Spec.Name, p.Spec.Region)
+	if p.Project != nil {
+		title += ", project " + p.Project.Name
+	}
+	return title
 }

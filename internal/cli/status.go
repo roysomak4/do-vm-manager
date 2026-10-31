@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -30,6 +31,7 @@ type statusHost struct {
 
 type statusReport struct {
 	Cluster string       `json:"cluster"`
+	Project string       `json:"project,omitempty"`
 	Hosts   []statusHost `json:"hosts"`
 	Orphans []output.VM  `json:"orphans"`
 }
@@ -55,9 +57,23 @@ func newStatusCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			plan, err := engine.BuildPlan(cmd.Context(), client, s)
+			ctx := cmd.Context()
+			plan, err := engine.BuildPlan(ctx, client, s)
 			if err != nil {
 				return err
+			}
+			if s.Project != "" {
+				projects, err := client.Projects(ctx)
+				if err != nil {
+					return fmt.Errorf("list projects: %w", err)
+				}
+				project, err := spec.FindProject(projects, s.Project)
+				if err != nil {
+					return err
+				}
+				if err := plan.UseProject(ctx, client, project); err != nil {
+					return err
+				}
 			}
 			report := buildStatus(plan)
 			if format == formatJSON {
@@ -82,11 +98,18 @@ func buildStatus(p *engine.Plan) statusReport {
 	}
 
 	r := statusReport{Cluster: p.Spec.Name, Orphans: []output.VM{}}
+	if p.Project != nil {
+		r.Project = p.Project.Name
+	}
 	for _, h := range p.Spec.Hosts() {
 		sh := statusHost{Hostname: h.Name, Role: h.Role, State: stateMissing}
 		if e, ok := existing[h.Name]; ok {
 			vm := output.NewVM(h.Role, &e.Droplet)
-			sh.State, sh.Droplet, sh.Note = stateExists, &vm, strings.Join(e.Drift, "; ")
+			notes := e.Drift
+			if e.OutsideProject {
+				notes = append(slices.Clone(notes), "not in project "+p.Project.Name+"; create moves it")
+			}
+			sh.State, sh.Droplet, sh.Note = stateExists, &vm, strings.Join(notes, "; ")
 		} else if reason, ok := conflicts[h.Name]; ok {
 			sh.State, sh.Note = stateConflict, reason
 		}

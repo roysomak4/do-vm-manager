@@ -10,6 +10,8 @@ image: ubuntu-24-04-x64
 ssh_keys: []
 tags: [dovm-test]
 monitoring: true
+# Optional DigitalOcean project, by name or ID; the default project when omitted.
+# project: My Project
 
 roles:
   manager:

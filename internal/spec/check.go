@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/digitalocean/godo"
 
@@ -71,10 +72,44 @@ func (s *Spec) Check(cat *cloud.Catalog) (*Estimate, error) {
 		}
 	}
 
+	if s.Project != "" {
+		if _, err := FindProject(cat.Projects, s.Project); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
 	return est, nil
+}
+
+// FindProject finds a project by ID or exact name.
+func FindProject(projects []godo.Project, ref string) (*godo.Project, error) {
+	var byName []*godo.Project
+	var similar []string
+	for i := range projects {
+		p := &projects[i]
+		switch {
+		case p.ID == ref:
+			return p, nil
+		case p.Name == ref:
+			byName = append(byName, p)
+		case strings.EqualFold(p.Name, ref):
+			similar = append(similar, p.Name)
+		}
+	}
+	switch len(byName) {
+	case 1:
+		return byName[0], nil
+	case 0:
+		msg := fmt.Sprintf("project %q does not exist", ref)
+		if len(similar) > 0 {
+			msg += fmt.Sprintf(" (did you mean %q? names are case-sensitive)", similar[0])
+		}
+		return nil, errors.New(msg)
+	}
+	return nil, fmt.Errorf("%d projects are named %q; use the project's ID instead", len(byName), ref)
 }
 
 func findRegion(regions []godo.Region, slug string) *godo.Region {

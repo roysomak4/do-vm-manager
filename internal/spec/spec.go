@@ -23,6 +23,7 @@ type Spec struct {
 	Monitoring bool            `yaml:"monitoring,omitempty"`
 	IPv6       bool            `yaml:"ipv6,omitempty"`
 	VPCUUID    string          `yaml:"vpc_uuid,omitempty"`
+	Project    string          `yaml:"project,omitempty"` // name or ID; empty means the account's default project
 	Roles      map[string]Role `yaml:"roles"`
 }
 
@@ -86,6 +87,9 @@ func (s *Spec) Validate() error {
 	}
 	if len(s.Roles) == 0 {
 		errs = append(errs, errors.New("at least one role is required"))
+	}
+	if s.Project != strings.TrimSpace(s.Project) {
+		errs = append(errs, fmt.Errorf("project %q has leading or trailing spaces", s.Project))
 	}
 	for _, t := range s.Tags {
 		if !tagRe.MatchString(t) {

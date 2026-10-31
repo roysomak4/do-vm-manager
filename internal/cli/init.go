@@ -41,7 +41,7 @@ func newInitCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			ctx := cmd.Context()
-			fmt.Fprintln(cmd.ErrOrStderr(), "Fetching regions, sizes, images and SSH keys…")
+			fmt.Fprintln(cmd.ErrOrStderr(), "Fetching regions, sizes, images, SSH keys and projects…")
 			var cat tui.WizardCatalog
 			eg, ectx := errgroup.WithContext(ctx)
 			eg.Go(func() (err error) { cat.Regions, err = client.Regions(ectx); return })
@@ -50,6 +50,13 @@ func newInitCmd(g *globalFlags) *cobra.Command {
 			eg.Go(func() (err error) { cat.SSHKeys, err = client.SSHKeys(ectx); return })
 			if err := eg.Wait(); err != nil {
 				return fmt.Errorf("fetch account data: %w", err)
+			}
+			// Projects are optional: a token without project access still gets a spec,
+			// with droplets in the default project.
+			if projects, err := client.Projects(ctx); err == nil {
+				cat.Projects = projects
+			} else if ctx.Err() == nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Could not list projects (%v); droplets will go into the default project.\n", err)
 			}
 
 			s, err := tui.Wizard(ctx, cat, path)

@@ -19,9 +19,11 @@ import (
 
 // fakeDO serves the droplet list and delete endpoints from memory.
 type fakeDO struct {
-	mu       sync.Mutex
-	droplets []map[string]any
-	deleted  []int
+	mu           sync.Mutex
+	droplets     []map[string]any
+	deleted      []int
+	projects     map[string][]int // project ID -> droplet IDs; "Lab" is "p-lab"
+	projectCalls int
 }
 
 func (f *fakeDO) add(id int, name string, tags ...string) {
@@ -57,6 +59,22 @@ func (f *fakeDO) handler(t *testing.T) http.Handler {
 		f.droplets = slices.DeleteFunc(f.droplets, func(d map[string]any) bool { return d["id"] == id })
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /v2/projects", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.projectCalls++
+		f.mu.Unlock()
+		fmt.Fprint(w, `{"projects":[{"id":"p-default","name":"Default","is_default":true},{"id":"p-lab","name":"Lab"}]}`)
+	})
+	mux.HandleFunc("GET /v2/projects/{id}/resources", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.projectCalls++
+		var res []string
+		for _, id := range f.projects[r.PathValue("id")] {
+			res = append(res, fmt.Sprintf(`{"urn":"do:droplet:%d"}`, id))
+		}
+		fmt.Fprintf(w, `{"resources":[%s]}`, strings.Join(res, ","))
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request %s %s", r.Method, r.URL)
 		w.WriteHeader(http.StatusNotImplemented)
@@ -78,9 +96,9 @@ func newCluster(t *testing.T) (*fakeDO, string) {
 	return f, srv.URL + "/"
 }
 
-func writeSpec(t *testing.T) string {
+func writeSpec(t *testing.T, extra ...string) string {
 	path := filepath.Join(t.TempDir(), "cluster.yaml")
-	data := `name: demo
+	data := strings.Join(extra, "") + `name: demo
 region: nyc3
 image: ubuntu-24-04-x64
 roles:
@@ -270,13 +288,10 @@ func TestList(t *testing.T) {
 	}
 }
 
-func TestCreateDryRunReportsOrphanAndConflict(t *testing.T) {
-	// create validates against the catalog first, so serve those endpoints too.
-	f := &fakeDO{}
-	f.add(3, "old01", "dovm:demo")
-	f.add(4, "vm02", "worker")
+// catalogServer serves f plus the catalog endpoints create and validate check.
+func catalogServer(t *testing.T, f *fakeDO) string {
 	mux := http.NewServeMux()
-	mux.Handle("GET /v2/droplets", f.handler(t))
+	mux.Handle("/", f.handler(t))
 	mux.HandleFunc("GET /v2/regions", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"regions":[{"slug":"nyc3","available":true}]}`)
 	})
@@ -290,9 +305,16 @@ func TestCreateDryRunReportsOrphanAndConflict(t *testing.T) {
 		fmt.Fprint(w, `{"image":{"slug":"ubuntu-24-04-x64","status":"available"}}`)
 	})
 	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv.URL + "/"
+}
 
-	out, err := execute(srv.URL+"/", "", "create", writeSpec(t), "--dry-run")
+func TestCreateDryRunReportsOrphanAndConflict(t *testing.T) {
+	f := &fakeDO{}
+	f.add(3, "old01", "dovm:demo")
+	f.add(4, "vm02", "worker")
+
+	out, err := execute(catalogServer(t, f), "", "create", writeSpec(t), "--dry-run")
 	if err == nil || !strings.Contains(err.Error(), "1 host(s) conflict") {
 		t.Fatalf("err = %v\n%s", err, out)
 	}
@@ -327,6 +349,14 @@ func TestImport(t *testing.T) {
 		t.Errorf("spec = %+v", s)
 	}
 
+	if s.Project != "" {
+		t.Errorf("project = %q, want none by default", s.Project)
+	}
+	out, err = execute("", "", "import", hostFile, "-o", "-", "--name", "k8s", "--project", "My Lab")
+	if err != nil || !strings.Contains(out, "project: My Lab\n") {
+		t.Errorf("import --project: %v\n%s", err, out)
+	}
+
 	if _, err := execute("", "", args...); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("second import without --force: %v", err)
 	}
@@ -336,5 +366,56 @@ func TestImport(t *testing.T) {
 	}
 	if _, err := execute("", "", "import", hostFile, "-o", "-"); err == nil || !strings.Contains(err.Error(), "name") {
 		t.Errorf("missing --name: %v", err)
+	}
+}
+
+func TestProjectInStatusAndDryRun(t *testing.T) {
+	f := &fakeDO{projects: map[string][]int{"p-lab": {1}}}
+	f.add(1, "cp01", "manager", "dovm:demo")
+	f.add(2, "vm01", "worker", "dovm:demo")
+	url := catalogServer(t, f)
+	path := writeSpec(t, "project: Lab\n")
+
+	out, err := execute(url, "", "status", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "not in project Lab; create moves it") || strings.Count(out, "not in project") != 1 {
+		t.Errorf("status should flag only vm01:\n%s", out)
+	}
+
+	out, err = execute(url, "", "create", path, "--dry-run")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"move to project Lab", `2 to create, 2 already exist, 1 to move into project "Lab".`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry run missing %q:\n%s", want, out)
+		}
+	}
+
+	out, err = execute(url, "", "validate", path)
+	if err != nil || !strings.Contains(out, `Droplets go into project "Lab".`) {
+		t.Errorf("validate: %v\n%s", err, out)
+	}
+	_, err = execute(url, "", "validate", writeSpec(t, "project: lab\n"))
+	if err == nil || !strings.Contains(err.Error(), `did you mean "Lab"`) {
+		t.Errorf("validate with a wrong-case project: %v", err)
+	}
+}
+
+func TestNoProjectMakesNoProjectCalls(t *testing.T) {
+	f := &fakeDO{}
+	f.add(1, "cp01", "manager", "dovm:demo")
+	url := catalogServer(t, f)
+	// Tokens without project access must keep working for specs without a project.
+	for _, args := range [][]string{{"create", writeSpec(t), "--dry-run"}, {"validate", writeSpec(t)}, {"status", writeSpec(t)}} {
+		out, err := execute(url, "", args...)
+		if err != nil || strings.Contains(out, "project") {
+			t.Errorf("%s: err=%v\n%s", args[0], err, out)
+		}
+	}
+	if f.projectCalls != 0 {
+		t.Errorf("%d project API calls for a spec without a project", f.projectCalls)
 	}
 }

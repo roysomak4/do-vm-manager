@@ -23,6 +23,9 @@ type WizardCatalog struct {
 	Sizes   []godo.Size
 	Images  []godo.Image // distribution images
 	SSHKeys []godo.Key
+	// Projects is nil when the token cannot list projects; the wizard then
+	// leaves droplets in the default project without asking.
+	Projects []godo.Project
 }
 
 // ErrAborted is returned when the user quits the wizard or declines to save.
@@ -69,6 +72,11 @@ func Wizard(ctx context.Context, cat WizardCatalog, path string) (*spec.Spec, er
 	var tags string
 	fields := []huh.Field{
 		huh.NewSelect[string]().Title("Image").Height(10).Options(images...).Value(&s.Image),
+	}
+	if projects := projectOptions(cat.Projects); len(projects) > 1 {
+		fields = append(fields, huh.NewSelect[string]().Title("Project").
+			Description("The DigitalOcean project the droplets are put in.").Height(8).
+			Options(projects...).Value(&s.Project))
 	}
 	if len(cat.SSHKeys) > 0 {
 		fields = append(fields, huh.NewMultiSelect[string]().Title("SSH keys").
@@ -312,6 +320,39 @@ func formatMemory(mb int) string {
 	return fmt.Sprintf("%gGB", float64(mb)/1024)
 }
 
+// projectOptions lists the default project first, as the empty value, which
+// leaves droplets where DigitalOcean puts them. A project whose name is shared
+// with another is chosen by ID.
+func projectOptions(projects []godo.Project) []huh.Option[string] {
+	projects = slices.Clone(projects)
+	slices.SortFunc(projects, func(a, b godo.Project) int {
+		return cmp.Or(-cmp.Compare(boolInt(a.IsDefault), boolInt(b.IsDefault)), cmp.Compare(a.Name, b.Name))
+	})
+	count := map[string]int{}
+	for _, p := range projects {
+		count[p.Name]++
+	}
+	var opts []huh.Option[string]
+	for _, p := range projects {
+		switch {
+		case p.IsDefault:
+			opts = append(opts, huh.NewOption(p.Name+"  (default)", ""))
+		case count[p.Name] > 1:
+			opts = append(opts, huh.NewOption(fmt.Sprintf("%s  (%s)", p.Name, p.ID), p.ID))
+		default:
+			opts = append(opts, huh.NewOption(p.Name, p.Name))
+		}
+	}
+	return opts
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func keyOptions(keys []godo.Key) []huh.Option[string] {
 	var opts []huh.Option[string]
 	for _, k := range keys {
@@ -322,7 +363,7 @@ func keyOptions(keys []godo.Key) []huh.Option[string] {
 
 // checkCatalog adapts the wizard's data to what spec.Check expects.
 func checkCatalog(cat WizardCatalog, image string) *cloud.Catalog {
-	c := &cloud.Catalog{Regions: cat.Regions, Sizes: cat.Sizes, SSHKeys: cat.SSHKeys}
+	c := &cloud.Catalog{Regions: cat.Regions, Sizes: cat.Sizes, SSHKeys: cat.SSHKeys, Projects: cat.Projects}
 	for i := range cat.Images {
 		if cat.Images[i].Slug == image {
 			c.Image = &cat.Images[i]
@@ -333,7 +374,11 @@ func checkCatalog(cat WizardCatalog, image string) *cloud.Catalog {
 
 func summary(s *spec.Spec, est *spec.Estimate) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s in %s, image %s\n\n", s.Name, s.Region, s.Image)
+	fmt.Fprintf(&b, "%s in %s, image %s\n", s.Name, s.Region, s.Image)
+	if s.Project != "" {
+		fmt.Fprintf(&b, "project %s\n", s.Project)
+	}
+	b.WriteString("\n")
 	roles := make([]string, 0, len(s.Roles))
 	for r := range s.Roles {
 		roles = append(roles, r)

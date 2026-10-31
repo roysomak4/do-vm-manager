@@ -5,8 +5,11 @@ package cloud
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/digitalocean/godo"
@@ -171,22 +174,80 @@ func (c *Client) Image(ctx context.Context, ref string) (*godo.Image, error) {
 	return img, err
 }
 
-// Catalog is the live account data a spec is checked against.
-type Catalog struct {
-	Regions []godo.Region
-	Sizes   []godo.Size
-	SSHKeys []godo.Key
-	Image   *godo.Image // nil when the requested image does not exist
+// Projects lists the account's projects.
+func (c *Client) Projects(ctx context.Context) ([]godo.Project, error) {
+	return listAll(ctx, c.godo.Projects.List)
 }
 
-// Catalog fetches regions, sizes, SSH keys and the given image concurrently.
-func (c *Client) Catalog(ctx context.Context, image string) (*Catalog, error) {
+// ProjectDropletIDs lists the IDs of the droplets assigned to a project.
+func (c *Client) ProjectDropletIDs(ctx context.Context, projectID string) ([]int, error) {
+	resources, err := listAll(ctx, func(ctx context.Context, opt *godo.ListOptions) ([]godo.ProjectResource, *godo.Response, error) {
+		return c.godo.Projects.ListResources(ctx, projectID, opt)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var ids []int
+	for _, r := range resources {
+		if id, ok := strings.CutPrefix(r.URN, "do:droplet:"); ok {
+			if n, err := strconv.Atoi(id); err == nil {
+				ids = append(ids, n)
+			}
+		}
+	}
+	return ids, nil
+}
+
+// maxAssign caps the droplets moved into a project per request.
+const maxAssign = 50
+
+// AssignDroplets moves droplets into a project. Assigning a droplet that is
+// already in the project changes nothing, so this is safe to repeat.
+func (c *Client) AssignDroplets(ctx context.Context, projectID string, ids []int) error {
+	for chunk := range slices.Chunk(ids, maxAssign) {
+		urns := make([]any, len(chunk))
+		for i, id := range chunk {
+			urns[i] = godo.ToURN("droplet", id)
+		}
+		resources, _, err := c.godo.Projects.AssignResources(ctx, projectID, urns...)
+		if err != nil {
+			return err
+		}
+		var errs []error
+		for _, r := range resources {
+			if r.Status != "" && r.Status != "ok" && r.Status != "assigned" {
+				errs = append(errs, fmt.Errorf("%s: %s", r.URN, r.Status))
+			}
+		}
+		if err := errors.Join(errs...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Catalog is the live account data a spec is checked against.
+type Catalog struct {
+	Regions  []godo.Region
+	Sizes    []godo.Size
+	SSHKeys  []godo.Key
+	Image    *godo.Image    // nil when the requested image does not exist
+	Projects []godo.Project // only fetched when asked for
+}
+
+// Catalog fetches regions, sizes, SSH keys and the given image concurrently,
+// plus the account's projects if projects is set. Projects are optional so
+// that tokens without project access still work for specs that use none.
+func (c *Client) Catalog(ctx context.Context, image string, projects bool) (*Catalog, error) {
 	var cat Catalog
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { cat.Regions, err = c.Regions(ctx); return })
 	g.Go(func() (err error) { cat.Sizes, err = c.Sizes(ctx); return })
 	g.Go(func() (err error) { cat.SSHKeys, err = c.SSHKeys(ctx); return })
 	g.Go(func() (err error) { cat.Image, err = c.Image(ctx, image); return })
+	if projects {
+		g.Go(func() (err error) { cat.Projects, err = c.Projects(ctx); return })
+	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}

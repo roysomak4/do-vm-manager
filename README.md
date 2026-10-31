@@ -97,6 +97,12 @@ To see orphan handling, delete `test-vm02` from the spec file and run
 `./dovm destroy hosts/test.yaml --include-orphans` would delete it too. Put
 it back in the spec before continuing.
 
+To try projects, add `project: <one of your projects>` to `hosts/test.yaml`
+and run `./dovm create hosts/test.yaml --dry-run`: each existing droplet shows
+"move to project ...". Run `./dovm create hosts/test.yaml` to move them, and
+check the project in the control panel. Remove the line again and the
+droplets stay where they are; dovm never moves droplets back.
+
 **6. Interrupting a run.** Start from nothing so there is something to
 interrupt:
 
@@ -165,6 +171,7 @@ tags: [example]
 monitoring: true
 ipv6: false                           # optional
 # vpc_uuid: ...                       # optional; default VPC of the region otherwise
+# project: My Project                 # optional; name or ID, default project otherwise
 roles:
   manager:
     size: s-2vcpu-4gb
@@ -181,6 +188,21 @@ Unknown fields are rejected, so typos fail loudly.
 `dovm:<name>`, which is how dovm recognizes droplets it owns. There is no local
 state file: the tag is the source of truth.
 
+### Projects
+
+`project` is optional. Without it, droplets go into your account's default
+project, as DigitalOcean does on its own. With it, set to a project's name
+(case-sensitive) or ID, `create` puts every droplet in the spec into that
+project: the ones it creates, and existing ones that are somewhere else. So
+adding `project` to a running cluster and running `create` again moves it.
+`create --dry-run` and `status` show which droplets would move.
+
+The project must already exist; `validate` checks this. If moving droplets
+fails, the droplets still work, so `create` reports a warning instead of
+failing, and running it again retries the move. A token with custom scopes
+needs read and update access to projects; dovm makes no project requests for
+specs without `project`.
+
 ### The wizard
 
 ```sh
@@ -190,7 +212,8 @@ dovm init cluster.yaml
 The wizard offers the regions, images (newest first), sizes (cheapest first,
 with prices) and SSH keys available to your account. Hostnames can be listed
 (`web01, web02`) or generated (`worker*3` gives `worker01`, `worker02`,
-`worker03`). Before saving it checks the spec against your account and shows
+`worker03`). If you have more than one project it asks which to use, with the
+default project preselected. Before saving it checks the spec against your account and shows
 the monthly cost. It needs a terminal and will not overwrite an existing file
 without `--force`.
 
@@ -308,6 +331,7 @@ dovm validate cluster.yaml
 | `--tag-names` | `--tags` |
 | `--enable-monitoring` | `--monitoring` (on by default) |
 | `--enable-private-networking` | always on: droplets join the region's VPC |
+| (none) | `--project` to put the droplets in a DigitalOcean project |
 
 `--name` is required, because dovm tags droplets with the cluster name. The
 spec is written to `cluster.yaml` (`-o FILE`, or `-o -` for stdout). Droplets

@@ -116,3 +116,24 @@ func TestNaturalCompare(t *testing.T) {
 		t.Errorf("got %v\nwant %v", names, want)
 	}
 }
+
+func TestProjectOptions(t *testing.T) {
+	opts := projectOptions([]godo.Project{
+		{ID: "z", Name: "Zeta"},
+		{ID: "d", Name: "My Default", IsDefault: true},
+		{ID: "t1", Name: "Twin"},
+		{ID: "t2", Name: "Twin"},
+		{ID: "a", Name: "Alpha"},
+	})
+	var got []string
+	for _, o := range opts {
+		got = append(got, o.Key+"="+o.Value)
+	}
+	want := []string{"My Default  (default)=", "Alpha=Alpha", "Twin  (t1)=t1", "Twin  (t2)=t2", "Zeta=Zeta"}
+	if !slices.Equal(got, want) {
+		t.Errorf("projectOptions =\n%v\nwant\n%v", got, want)
+	}
+	if len(projectOptions(nil)) != 0 {
+		t.Error("no projects should give no options")
+	}
+}

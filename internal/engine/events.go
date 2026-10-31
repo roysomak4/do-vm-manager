@@ -17,6 +17,7 @@ const (
 	EventWarning                          // something worth noting that did not fail the run
 	EventRollback                         // rollback started
 	EventDeleted                          // the droplet for Hosts[0] was deleted during rollback
+	EventProject                          // Hosts were moved into the project named Detail
 )
 
 // Event reports progress during a run. Reporters are called from multiple
@@ -62,6 +63,8 @@ func (e Event) String() string {
 		return "rolling back: " + e.Detail
 	case EventDeleted:
 		return fmt.Sprintf("%s: droplet %d deleted", hosts, e.DropletID)
+	case EventProject:
+		return fmt.Sprintf("moved %s into project %s", hosts, e.Detail)
 	}
 	return fmt.Sprintf("event %d: %s", e.Kind, hosts)
 }

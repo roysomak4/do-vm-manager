@@ -17,6 +17,9 @@ import (
 	"github.com/roysomak4/do-vm-manager/internal/spec"
 )
 
+// assignTimeout bounds moving droplets into a project at the end of a run.
+const assignTimeout = time.Minute
+
 // maxBatch is the most droplets DigitalOcean creates in one request.
 const maxBatch = 10
 
@@ -90,6 +93,9 @@ type HostResult struct {
 type Result struct {
 	Hosts      []*HostResult
 	RolledBack bool
+	// ProjectErr is set if moving droplets into the plan's project failed. The
+	// droplets still work; running create again retries the move.
+	ProjectErr error
 }
 
 // Canceled reports whether the run was interrupted before every host finished.
@@ -126,6 +132,9 @@ func Run(ctx context.Context, api API, plan *Plan, opts Options) (*Result, error
 	r.waitReady(ctx)
 	if r.opts.Rollback && (ctx.Err() != nil || !r.result.OK()) {
 		r.rollback(ctx)
+	}
+	if !r.result.RolledBack && plan.Project != nil {
+		r.assignProject(ctx)
 	}
 	return r.result, nil
 }
@@ -417,6 +426,38 @@ func (r *runner) rollback(ctx context.Context) {
 		hr.Status = StatusRolledBack
 		r.emit(Event{Kind: EventDeleted, Hosts: []string{hr.Host.Name}, DropletID: id})
 	})
+}
+
+// assignProject moves the droplets this run created, and existing ones outside
+// the project, into the plan's project. Like rollback it runs even if ctx was
+// canceled, so an interrupted run does not leave droplets in the wrong project.
+func (r *runner) assignProject(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), assignTimeout)
+	defer cancel()
+	move := map[string]bool{}
+	for _, e := range r.plan.Existing {
+		move[e.Host.Name] = e.OutsideProject
+	}
+	var ids []int
+	var hosts []string
+	for _, hr := range r.result.Hosts {
+		// Failed droplets with an ID have disappeared; assigning them would fail.
+		if hr.Droplet == nil || hr.Status == StatusFailed || !(hr.Created || move[hr.Host.Name]) {
+			continue
+		}
+		ids = append(ids, hr.Droplet.ID)
+		hosts = append(hosts, hr.Host.Name)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	project := r.plan.Project
+	if err := r.api.AssignDroplets(ctx, project.ID, ids); err != nil {
+		r.result.ProjectErr = fmt.Errorf("move droplets into project %q: %w", project.Name, err)
+		r.emit(Event{Kind: EventWarning, Hosts: hosts, Detail: fmt.Sprintf("could not move into project %q; run create again to retry", project.Name), Err: err})
+		return
+	}
+	r.emit(Event{Kind: EventProject, Hosts: hosts, Detail: project.Name})
 }
 
 func names(hosts []spec.Host) []string {

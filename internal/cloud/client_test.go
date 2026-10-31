@@ -2,9 +2,12 @@ package cloud
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,14 +135,68 @@ func TestCatalog(t *testing.T) {
 	mux.HandleFunc("/v2/images/12345", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"image":{"id":12345,"slug":"","status":"available"}}`)
 	})
+	var projectCalls atomic.Int32
+	mux.HandleFunc("/v2/projects", func(w http.ResponseWriter, r *http.Request) {
+		projectCalls.Add(1)
+		fmt.Fprint(w, `{"projects":[{"id":"p1","name":"Lab","is_default":true}]}`)
+	})
 	c := newTestClient(t, mux)
 
-	cat, err := c.Catalog(context.Background(), "12345")
+	cat, err := c.Catalog(context.Background(), "12345", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cat.Regions) != 1 || len(cat.Sizes) != 1 || len(cat.SSHKeys) != 1 || cat.Image == nil || cat.Image.ID != 12345 {
 		t.Fatalf("catalog = %+v", cat)
+	}
+	if cat.Projects != nil || projectCalls.Load() != 0 {
+		t.Error("projects fetched although not asked for")
+	}
+	cat, err = c.Catalog(context.Background(), "12345", true)
+	if err != nil || len(cat.Projects) != 1 || cat.Projects[0].Name != "Lab" {
+		t.Fatalf("catalog with projects = %+v, %v", cat, err)
+	}
+}
+
+func TestProjectDroplets(t *testing.T) {
+	var assigned []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v2/projects/p1/resources", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"resources":[{"urn":"do:droplet:11"},{"urn":"do:volume:abc"},{"urn":"do:droplet:12"}]}`)
+	})
+	mux.HandleFunc("POST /v2/projects/p1/resources", func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Resources []string }
+		json.NewDecoder(r.Body).Decode(&body)
+		assigned = append(assigned, body.Resources...)
+		var out []string
+		for _, urn := range body.Resources {
+			status := "ok"
+			if urn == "do:droplet:99" {
+				status = "not_found"
+			}
+			out = append(out, fmt.Sprintf(`{"urn":%q,"status":%q}`, urn, status))
+		}
+		fmt.Fprintf(w, `{"resources":[%s]}`, strings.Join(out, ","))
+	})
+	c := newTestClient(t, mux)
+	ctx := context.Background()
+
+	ids, err := c.ProjectDropletIDs(ctx, "p1")
+	if err != nil || !slices.Equal(ids, []int{11, 12}) {
+		t.Fatalf("ProjectDropletIDs = %v, %v", ids, err)
+	}
+	many := make([]int, maxAssign+3)
+	for i := range many {
+		many[i] = i + 1
+	}
+	if err := c.AssignDroplets(ctx, "p1", many); err != nil {
+		t.Fatal(err)
+	}
+	if len(assigned) != len(many) || assigned[0] != "do:droplet:1" {
+		t.Errorf("assigned %d resources, first %q", len(assigned), assigned[0])
+	}
+	if err := c.AssignDroplets(ctx, "p1", []int{5, 99}); err == nil || !strings.Contains(err.Error(), "do:droplet:99: not_found") {
+		t.Errorf("per-resource failure not reported: %v", err)
 	}
 }
 

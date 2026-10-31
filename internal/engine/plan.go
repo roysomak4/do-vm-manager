@@ -19,6 +19,8 @@ type API interface {
 	DropletsByTag(ctx context.Context, tag string) ([]godo.Droplet, error)
 	CreateDroplets(ctx context.Context, req *godo.DropletMultiCreateRequest) ([]godo.Droplet, error)
 	DeleteDroplet(ctx context.Context, id int) error
+	ProjectDropletIDs(ctx context.Context, projectID string) ([]int, error)
+	AssignDroplets(ctx context.Context, projectID string, ids []int) error
 }
 
 // Plan says what a create run will do for each host in a spec.
@@ -28,6 +30,7 @@ type Plan struct {
 	Existing  []Existing
 	Conflicts []Conflict
 	Orphans   []godo.Droplet // carry the cluster tag but are not named in the spec
+	Project   *godo.Project  // project to put droplets in; nil leaves them where they are
 }
 
 // Existing is a host whose droplet already exists and carries the spec's cluster tag.
@@ -35,6 +38,8 @@ type Existing struct {
 	Host    spec.Host
 	Droplet godo.Droplet
 	Drift   []string // differences from the spec; reported, never changed
+	// OutsideProject is set when the plan has a project and the droplet is not in it.
+	OutsideProject bool
 }
 
 // Conflict is a host that cannot be created or adopted safely.
@@ -95,6 +100,31 @@ func BuildPlan(ctx context.Context, api API, s *spec.Spec) (*Plan, error) {
 		}
 	}
 	return p, nil
+}
+
+// UseProject makes the run put every droplet in project, and marks the
+// existing droplets that are not in it yet.
+func (p *Plan) UseProject(ctx context.Context, api API, project *godo.Project) error {
+	ids, err := api.ProjectDropletIDs(ctx, project.ID)
+	if err != nil {
+		return fmt.Errorf("list droplets in project %q: %w", project.Name, err)
+	}
+	p.Project = project
+	for i := range p.Existing {
+		p.Existing[i].OutsideProject = !slices.Contains(ids, p.Existing[i].Droplet.ID)
+	}
+	return nil
+}
+
+// ToMove returns the existing droplets that will be moved into the plan's project.
+func (p *Plan) ToMove() []Existing {
+	var out []Existing
+	for _, e := range p.Existing {
+		if e.OutsideProject {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // Err returns the plan's conflicts as one error, or nil.

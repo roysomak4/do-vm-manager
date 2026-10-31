@@ -32,6 +32,10 @@ type fakeAPI struct {
 	deleted      []int
 	deleteErr    map[int]error
 	onPoll       func() // called on each DropletsByTag
+
+	projects  map[string][]int // project ID -> droplet IDs
+	assignErr error
+	assigns   [][]int
 }
 
 func newFake() *fakeAPI {
@@ -149,4 +153,31 @@ func (f *fakeAPI) countNamed(name string) int {
 		}
 	}
 	return n
+}
+
+func (f *fakeAPI) ProjectDropletIDs(ctx context.Context, projectID string) ([]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.projects[projectID]), nil
+}
+
+func (f *fakeAPI) AssignDroplets(ctx context.Context, projectID string, ids []int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.assigns = append(f.assigns, slices.Clone(ids))
+	if f.assignErr != nil {
+		return f.assignErr
+	}
+	if f.projects == nil {
+		f.projects = map[string][]int{}
+	}
+	for _, id := range ids {
+		if !slices.Contains(f.projects[projectID], id) {
+			f.projects[projectID] = append(f.projects[projectID], id)
+		}
+	}
+	return nil
 }

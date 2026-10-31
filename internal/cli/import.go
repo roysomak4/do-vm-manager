@@ -27,6 +27,7 @@ type importFlags struct {
 	tags       []string
 	monitoring bool
 	ipv6       bool
+	project    string
 }
 
 func newImportCmd() *cobra.Command {
@@ -57,6 +58,7 @@ func newImportCmd() *cobra.Command {
 	fl.StringSliceVar(&f.tags, "tags", nil, "extra tags for every droplet, comma-separated")
 	fl.BoolVar(&f.monitoring, "monitoring", true, "enable droplet monitoring")
 	fl.BoolVar(&f.ipv6, "ipv6", false, "enable IPv6")
+	fl.StringVar(&f.project, "project", "", "DigitalOcean project name or ID (default: the account's default project)")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
@@ -78,7 +80,7 @@ func runImport(cmd *cobra.Command, f *importFlags, hostFile string) error {
 
 	s := &spec.Spec{
 		Name: f.name, Region: f.region, Image: f.image,
-		SSHKeys: f.sshKeys, Tags: f.tags, Monitoring: f.monitoring, IPv6: f.ipv6,
+		SSHKeys: f.sshKeys, Tags: f.tags, Monitoring: f.monitoring, IPv6: f.ipv6, Project: f.project,
 		Roles: map[string]spec.Role{},
 	}
 	for role, names := range hosts {

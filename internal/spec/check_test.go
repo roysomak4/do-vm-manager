@@ -106,3 +106,41 @@ func TestCheckRegionAndImage(t *testing.T) {
 		})
 	}
 }
+
+func TestFindProject(t *testing.T) {
+	projects := []godo.Project{
+		{ID: "id-1", Name: "Default", IsDefault: true},
+		{ID: "id-2", Name: "Lab"},
+		{ID: "id-3", Name: "Twin"},
+		{ID: "id-4", Name: "Twin"},
+	}
+	for ref, wantID := range map[string]string{"Lab": "id-2", "id-3": "id-3", "Default": "id-1"} {
+		if p, err := FindProject(projects, ref); err != nil || p.ID != wantID {
+			t.Errorf("FindProject(%q) = %v, %v; want %s", ref, p, err, wantID)
+		}
+	}
+	for ref, want := range map[string]string{
+		"lab":  `project "lab" does not exist (did you mean "Lab"?`,
+		"Nope": `project "Nope" does not exist`,
+		"Twin": `2 projects are named "Twin"; use the project's ID`,
+	} {
+		if _, err := FindProject(projects, ref); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("FindProject(%q) error = %v, want %q", ref, err, want)
+		}
+	}
+}
+
+func TestCheckProject(t *testing.T) {
+	s, err := Parse([]byte(validYAML + "project: Lab\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := testCatalog()
+	if _, err := s.Check(cat); err == nil || !strings.Contains(err.Error(), `project "Lab" does not exist`) {
+		t.Errorf("missing project: %v", err)
+	}
+	cat.Projects = []godo.Project{{ID: "p", Name: "Lab"}}
+	if _, err := s.Check(cat); err != nil {
+		t.Errorf("Check: %v", err)
+	}
+}
