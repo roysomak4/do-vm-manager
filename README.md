@@ -213,7 +213,9 @@ The wizard offers the regions, images (newest first), sizes (cheapest first,
 with prices) and SSH keys available to your account. Hostnames can be listed
 (`web01, web02`) or generated (`worker*3` gives `worker01`, `worker02`,
 `worker03`). If you have more than one project it asks which to use, with the
-default project preselected. Before saving it checks the spec against your account and shows
+default project preselected. At least one SSH key must be selected (press
+space to tick it; a lone key is ticked for you), since without one
+DigitalOcean emails a root password instead. Before saving it checks the spec against your account and shows
 the monthly cost. It needs a terminal and will not overwrite an existing file
 without `--force`.
 
@@ -276,6 +278,25 @@ running `create` again after a failure, timeout or Ctrl-C only creates what is
 still missing. With `--rollback-on-failure`, a failed or interrupted run
 instead deletes every droplet *that run* created, never ones that existed
 before it.
+
+**Password login for participants.** For a course or workshop, `--login-user`
+adds an ordinary user (no sudo) to every droplet this run creates. That user
+logs in over SSH with a password, the same on all droplets, while root stays
+SSH-key only for admins:
+
+```sh
+dovm create course.yaml --login-user student         # prompts for the password twice
+DOVM_LOGIN_PASSWORD=... dovm create course.yaml --yes --login-user student
+dovm create course.yaml --login-user student --login-password-file pw.txt
+```
+
+The spec must list `ssh_keys`. The user is set up by cloud-init on first boot,
+so password logins start working about a minute after the droplet shows as
+active. The password is never written to the spec or the output files, but it
+is stored in plain text in the droplet's user data, which anyone logged in to
+the droplet can read from the metadata service. Droplets that already exist
+are not changed, so when re-running `create` to finish a cluster, pass the same
+user and password.
 
 **Retries.** Read requests are retried with exponential backoff on rate
 limiting (429) and server errors (5xx), honoring `Retry-After`. Create requests

@@ -30,6 +30,45 @@ func prompt(cmd *cobra.Command, question string) (string, error) {
 	return strings.TrimSpace(answer), nil
 }
 
+// promptPassword asks for a password without echoing it. Like prompt, it
+// refuses when stdin is not a terminal, but accepts input set with cmd.SetIn.
+func promptPassword(cmd *cobra.Command, question string) (string, error) {
+	in := cmd.InOrStdin()
+	if in == os.Stdin && !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", errNotInteractive
+	}
+	fmt.Fprint(cmd.OutOrStdout(), question+" ")
+	if in != os.Stdin {
+		return readLine(in)
+	}
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(cmd.OutOrStdout())
+	return string(b), err
+}
+
+// readLine reads up to a newline one byte at a time, so that consecutive
+// prompts on the same reader do not lose input to read-ahead buffering.
+func readLine(r io.Reader) (string, error) {
+	var line []byte
+	b := make([]byte, 1)
+	for {
+		n, err := r.Read(b)
+		if n == 1 {
+			if b[0] == '\n' {
+				break
+			}
+			line = append(line, b[0])
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return strings.TrimRight(string(line), "\r"), nil
+}
+
 const (
 	formatTable = "table"
 	formatJSON  = "json"

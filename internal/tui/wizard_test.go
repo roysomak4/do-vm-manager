@@ -137,3 +137,12 @@ func TestProjectOptions(t *testing.T) {
 		t.Error("no projects should give no options")
 	}
 }
+
+func TestValidateKeys(t *testing.T) {
+	if validateKeys(nil) == nil {
+		t.Error("no keys should be rejected")
+	}
+	if err := validateKeys([]string{"123"}); err != nil {
+		t.Error(err)
+	}
+}

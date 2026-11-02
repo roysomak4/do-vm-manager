@@ -37,6 +37,7 @@ type Options struct {
 	Concurrency     int // create requests in flight at once
 	Rollback        bool
 	RollbackTimeout time.Duration
+	UserData        string // cloud-init user data for new droplets; empty sends none
 	Reporter        Reporter
 }
 
@@ -256,6 +257,7 @@ func (r *runner) request(hosts []spec.Host) *godo.DropletMultiCreateRequest {
 		IPv6:       s.IPv6,
 		VPCUUID:    s.VPCUUID,
 		Tags:       append(append([]string{}, hosts[0].Tags...), r.tag),
+		UserData:   r.opts.UserData,
 	}
 	for _, k := range s.SSHKeys {
 		req.SSHKeys = append(req.SSHKeys, sshKeyRef(k))

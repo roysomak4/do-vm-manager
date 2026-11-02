@@ -79,9 +79,12 @@ func Wizard(ctx context.Context, cat WizardCatalog, path string) (*spec.Spec, er
 			Options(projects...).Value(&s.Project))
 	}
 	if len(cat.SSHKeys) > 0 {
+		if len(cat.SSHKeys) == 1 {
+			s.SSHKeys = []string{strconv.Itoa(cat.SSHKeys[0].ID)}
+		}
 		fields = append(fields, huh.NewMultiSelect[string]().Title("SSH keys").
 			Description("space to select, enter to continue").Height(8).
-			Options(keyOptions(cat.SSHKeys)...).Value(&s.SSHKeys))
+			Options(keyOptions(cat.SSHKeys)...).Value(&s.SSHKeys).Validate(validateKeys))
 	}
 	fields = append(fields,
 		huh.NewInput().Title("Extra tags for every droplet").
@@ -359,6 +362,15 @@ func keyOptions(keys []godo.Key) []huh.Option[string] {
 		opts = append(opts, huh.NewOption(fmt.Sprintf("%s  (%s)", k.Name, k.Fingerprint), strconv.Itoa(k.ID)))
 	}
 	return opts
+}
+
+// validateKeys insists on an SSH key: without one DigitalOcean emails a root
+// password instead, and pressing enter on a key does not select it.
+func validateKeys(keys []string) error {
+	if len(keys) == 0 {
+		return errors.New("select at least one key with space")
+	}
+	return nil
 }
 
 // checkCatalog adapts the wizard's data to what spec.Check expects.

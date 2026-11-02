@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/roysomak4/do-vm-manager/internal/spec"
 )
@@ -24,6 +25,15 @@ type fakeDO struct {
 	deleted      []int
 	projects     map[string][]int // project ID -> droplet IDs; "Lab" is "p-lab"
 	projectCalls int
+	creates      []createRequest
+}
+
+// createRequest is the part of a droplet create request the tests check.
+type createRequest struct {
+	Names    []string `json:"names"`
+	Tags     []string `json:"tags"`
+	SSHKeys  []any    `json:"ssh_keys"`
+	UserData string   `json:"user_data"`
 }
 
 func (f *fakeDO) add(id int, name string, tags ...string) {
@@ -50,6 +60,20 @@ func (f *fakeDO) handler(t *testing.T) http.Handler {
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"droplets": out})
+	})
+	mux.HandleFunc("POST /v2/droplets", func(w http.ResponseWriter, r *http.Request) {
+		var req createRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode create request: %v", err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.creates = append(f.creates, req)
+		start := len(f.droplets)
+		for i, name := range req.Names {
+			f.add(100+len(f.droplets)+i, name, req.Tags...)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"droplets": f.droplets[start:]})
 	})
 	mux.HandleFunc("DELETE /v2/droplets/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.Atoi(r.PathValue("id"))
@@ -109,6 +133,11 @@ roles:
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestMain(m *testing.M) {
+	pollInterval = time.Millisecond
+	os.Exit(m.Run())
 }
 
 // execute runs dovm with args against apiURL, feeding stdin to prompts.
@@ -299,7 +328,7 @@ func catalogServer(t *testing.T, f *fakeDO) string {
 		fmt.Fprint(w, `{"sizes":[{"slug":"s-1vcpu-1gb","available":true,"regions":["nyc3"]},{"slug":"s-2vcpu-2gb","available":true,"regions":["nyc3"]}]}`)
 	})
 	mux.HandleFunc("GET /v2/account/keys", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"ssh_keys":[]}`)
+		fmt.Fprint(w, `{"ssh_keys":[{"id":123,"fingerprint":"aa:bb","name":"admin"}]}`)
 	})
 	mux.HandleFunc("GET /v2/images/ubuntu-24-04-x64", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"image":{"slug":"ubuntu-24-04-x64","status":"available"}}`)
@@ -417,5 +446,86 @@ func TestNoProjectMakesNoProjectCalls(t *testing.T) {
 	}
 	if f.projectCalls != 0 {
 		t.Errorf("%d project API calls for a spec without a project", f.projectCalls)
+	}
+}
+
+func TestCreateWithLoginUser(t *testing.T) {
+	f := &fakeDO{}
+	url := catalogServer(t, f)
+	path := writeSpec(t, "ssh_keys: [\"123\"]\n")
+
+	out, err := execute(url, "s3cret\ns3cret\n", "create", path, "--yes", "--login-user", "student", "--output-dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "New droplets get login user student") {
+		t.Errorf("missing login user note:\n%s", out)
+	}
+	if len(f.creates) == 0 {
+		t.Fatal("no droplets created")
+	}
+	for _, req := range f.creates {
+		if !strings.HasPrefix(req.UserData, "#cloud-config\n") || !strings.Contains(req.UserData, "name: student") ||
+			!strings.Contains(req.UserData, "plain_text_passwd: s3cret") {
+			t.Errorf("%v: user data =\n%s", req.Names, req.UserData)
+		}
+		if len(req.SSHKeys) != 1 || req.SSHKeys[0] != 123.0 {
+			t.Errorf("%v: ssh keys = %+v", req.Names, req.SSHKeys)
+		}
+	}
+}
+
+func TestCreateLoginPasswordSources(t *testing.T) {
+	path := writeSpec(t, "ssh_keys: [\"123\"]\n")
+	file := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(file, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, env, stdin, want string
+		args                   []string
+	}{
+		{name: "file wins over env", env: "from-env", args: []string{"--login-password-file", file}, want: "from-file"},
+		{name: "env", env: "from-env", want: "from-env"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(loginPasswordEnv, tc.env)
+			f := &fakeDO{}
+			args := append([]string{"create", path, "--yes", "--login-user", "student", "--output-dir", t.TempDir()}, tc.args...)
+			if out, err := execute(catalogServer(t, f), tc.stdin, args...); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if len(f.creates) == 0 || !strings.Contains(f.creates[0].UserData, "plain_text_passwd: "+tc.want) {
+				t.Errorf("creates = %+v", f.creates)
+			}
+		})
+	}
+}
+
+func TestCreateLoginUserErrors(t *testing.T) {
+	withKeys := writeSpec(t, "ssh_keys: [\"123\"]\n")
+	for _, tc := range []struct {
+		name, stdin, want string
+		args              []string
+	}{
+		{name: "no ssh keys", args: []string{writeSpec(t), "--login-user", "student"}, want: "needs ssh_keys"},
+		{name: "root", args: []string{withKeys, "--login-user", "root"}, want: "cannot be root"},
+		{name: "bad name", args: []string{withKeys, "--login-user", "Student"}, want: "is invalid"},
+		{name: "file without user", args: []string{withKeys, "--login-password-file", "x"}, want: "needs --login-user"},
+		{name: "mismatch", stdin: "one\ntwo\n", args: []string{withKeys, "--login-user", "student"}, want: "do not match"},
+		{name: "empty", stdin: "\n", args: []string{withKeys, "--login-user", "student"}, want: "empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(loginPasswordEnv, "")
+			f := &fakeDO{}
+			args := append([]string{"create", "--yes", "--output-dir", t.TempDir()}, tc.args...)
+			_, err := execute(catalogServer(t, f), tc.stdin, args...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+			if len(f.creates) != 0 {
+				t.Errorf("created droplets despite the error: %+v", f.creates)
+			}
+		})
 	}
 }

@@ -129,6 +129,22 @@ func TestRunCreatesInBatchesByRole(t *testing.T) {
 	}
 }
 
+func TestRunSendsUserData(t *testing.T) {
+	f := newFake()
+	opts := fastOpts()
+	opts.UserData = "#cloud-config\n"
+	run(t, f, twoRoles(), opts)
+
+	if len(f.requests) == 0 {
+		t.Fatal("no create requests")
+	}
+	for _, r := range f.requests {
+		if r.UserData != opts.UserData {
+			t.Errorf("%v: user data = %q", r.Names, r.UserData)
+		}
+	}
+}
+
 func TestRunAdoptsExistingDroplets(t *testing.T) {
 	f := newFake()
 	f.seed("cp01", "off", tag)

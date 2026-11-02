@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/roysomak4/do-vm-manager/internal/cloudinit"
 	"github.com/roysomak4/do-vm-manager/internal/engine"
 	"github.com/roysomak4/do-vm-manager/internal/output"
 	"github.com/roysomak4/do-vm-manager/internal/spec"
@@ -19,11 +21,13 @@ import (
 )
 
 type createFlags struct {
-	dryRun      bool
-	yes         bool
-	rollback    bool
-	waitTimeout time.Duration
-	outputDir   string
+	dryRun       bool
+	yes          bool
+	rollback     bool
+	waitTimeout  time.Duration
+	outputDir    string
+	loginUser    string
+	passwordFile string
 }
 
 func newCreateCmd(g *globalFlags) *cobra.Command {
@@ -35,7 +39,11 @@ func newCreateCmd(g *globalFlags) *cobra.Command {
 			"creates the missing ones and waits until each is active with an IP address.\n\n" +
 			"Every droplet is tagged dovm:<name>. Droplets that already carry that tag are\n" +
 			"left as they are, so re-running create after a failure or interruption only\n" +
-			"creates what is still missing.",
+			"creates what is still missing.\n\n" +
+			"With --login-user, new droplets get an unprivileged user who can log in over\n" +
+			"SSH with a password, shared by every droplet; root stays SSH-key only. The\n" +
+			"password is read from --login-password-file, then $" + loginPasswordEnv + ", then\n" +
+			"a prompt. Droplets that already exist are not changed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCreate(cmd, g, f, args[0])
@@ -46,6 +54,8 @@ func newCreateCmd(g *globalFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&f.rollback, "rollback-on-failure", false, "delete the droplets this run created if any host fails or the run is interrupted")
 	cmd.Flags().DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "how long to wait for droplets to become active")
 	cmd.Flags().StringVar(&f.outputDir, "output-dir", "output", "directory for inventory files")
+	cmd.Flags().StringVar(&f.loginUser, "login-user", "", "add this user, who logs in over SSH with a password, to new droplets")
+	cmd.Flags().StringVar(&f.passwordFile, "login-password-file", "", "file holding the --login-user password")
 	return cmd
 }
 
@@ -56,6 +66,16 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 	s, err := spec.Load(path)
 	if err != nil {
 		return validationFailed(err)
+	}
+	if f.loginUser != "" {
+		if err := cloudinit.ValidateUsername(f.loginUser); err != nil {
+			return err
+		}
+		if len(s.SSHKeys) == 0 {
+			return validationFailed(errors.New("--login-user needs ssh_keys in the spec, so admins can log in as root"))
+		}
+	} else if f.passwordFile != "" {
+		return errors.New("--login-password-file needs --login-user")
 	}
 	client, err := g.client()
 	if err != nil {
@@ -90,8 +110,22 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 		fmt.Fprintf(out, ", %d to move into project %s", len(plan.ToMove()), projectLabel(plan.Project))
 	}
 	fmt.Fprintf(out, ". Cluster total: $%.2f/month.\n", est.MonthlyPrice)
+	if f.loginUser != "" {
+		fmt.Fprintf(out, "New droplets get login user %s with a password; root stays SSH-key only.\n", f.loginUser)
+	}
 	if f.dryRun {
 		return nil
+	}
+
+	opts := engine.Options{WaitTimeout: f.waitTimeout, Rollback: f.rollback, PollInterval: pollInterval}
+	if f.loginUser != "" && len(plan.Create) > 0 {
+		password, err := loginPassword(cmd, f)
+		if err != nil {
+			return err
+		}
+		if opts.UserData, err = cloudinit.LoginUser(f.loginUser, password); err != nil {
+			return err
+		}
 	}
 	if len(plan.Create) > 0 && !f.yes {
 		answer, err := prompt(cmd, fmt.Sprintf("Create %d droplet(s)? [y/N]", len(plan.Create)))
@@ -106,7 +140,6 @@ func runCreate(cmd *cobra.Command, g *globalFlags, f *createFlags, path string) 
 		}
 	}
 
-	opts := engine.Options{WaitTimeout: f.waitTimeout, Rollback: f.rollback}
 	var res *engine.Result
 	if g.useTUI(cmd) {
 		cancelHint := "droplets already created are kept; run create again to finish"
@@ -289,4 +322,46 @@ func createTitle(p *engine.Plan) string {
 		title += ", project " + p.Project.Name
 	}
 	return title
+}
+
+// pollInterval overrides the engine's default status poll interval; for tests.
+var pollInterval time.Duration
+
+const loginPasswordEnv = "DOVM_LOGIN_PASSWORD"
+
+// loginPassword reads the --login-user password from the password file, the
+// environment or, failing both, a prompt that asks for it twice.
+func loginPassword(cmd *cobra.Command, f *createFlags) (string, error) {
+	if f.passwordFile != "" {
+		data, err := os.ReadFile(f.passwordFile)
+		if err != nil {
+			return "", fmt.Errorf("read login password: %w", err)
+		}
+		password := strings.TrimRight(string(data), "\r\n")
+		if password == "" {
+			return "", fmt.Errorf("login password file %s is empty", f.passwordFile)
+		}
+		return password, nil
+	}
+	if password := os.Getenv(loginPasswordEnv); password != "" {
+		return password, nil
+	}
+	password, err := promptPassword(cmd, fmt.Sprintf("Password for %s:", f.loginUser))
+	if errors.Is(err, errNotInteractive) {
+		return "", fmt.Errorf("no login password: set $%s or pass --login-password-file when running non-interactively", loginPasswordEnv)
+	}
+	if err != nil {
+		return "", err
+	}
+	if password == "" {
+		return "", errors.New("login password is empty")
+	}
+	again, err := promptPassword(cmd, "Repeat password:")
+	if err != nil {
+		return "", err
+	}
+	if again != password {
+		return "", errors.New("passwords do not match")
+	}
+	return password, nil
 }
