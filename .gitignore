@@ -7,7 +7,7 @@ coverage.*
 
 # dovm runtime state and outputs
 .dovm/
-output/
+/output/
 
 # Local specs and host files
 hosts/
