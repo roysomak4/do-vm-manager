@@ -387,3 +387,16 @@ goreleaser release --snapshot --clean    # output in dist/
 ## Acknowledgement
 
 This code base is a rewrite of the older python code in Golang for high performance and stability. Claude Code was used for developing automated unit tests, CI, github actions, and documentation. App behavior and end to end testing was performed and confirmed manually against digitalocean platform. For feature requests or bug reports, please open an Issue in this repo.
+
+## License and disclaimer
+
+Licensed under the [MIT License](LICENSE). The software is provided "as is",
+without warranty of any kind, and the author accepts no liability for any
+damage or harm arising from its use; see the license for the full terms.
+
+`dovm` creates and destroys billable resources in your DigitalOcean account
+using the API token you supply. You are solely responsible for any charges
+incurred, any data lost through deleted droplets, and the security of the
+droplets it creates (including SSH keys and passwords configured on them).
+Review your spec files and the commands you run before using this tool
+against an account that holds resources you care about.
