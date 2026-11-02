@@ -36,7 +36,7 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.apiURL, "api-url", "", "DigitalOcean API base URL")
 	_ = root.PersistentFlags().MarkHidden("api-url") // for tests
 
-	root.AddCommand(newInitCmd(g), newImportCmd(), newValidateCmd(g), newCreateCmd(g), newStatusCmd(g), newListCmd(g), newDestroyCmd(g))
+	root.AddCommand(newInitCmd(g), newValidateCmd(g), newCreateCmd(g), newStatusCmd(g), newListCmd(g), newDestroyCmd(g))
 	return root
 }
 

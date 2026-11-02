@@ -115,13 +115,6 @@ func TestLoadExamples(t *testing.T) {
 			t.Errorf("%s should be valid: %v", p, err)
 		}
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "examples", "hostname.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ParseHostList(data); err != nil {
-		t.Errorf("examples/hostname.txt: %v", err)
-	}
 }
 
 func TestLoadMissingFile(t *testing.T) {
