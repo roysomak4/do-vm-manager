@@ -21,6 +21,7 @@ archives:
       - goos: windows
         formats: [zip]
     files:
+      - LICENSE
       - README.md
       - examples/*
 
