@@ -1,11 +1,8 @@
-# DOVM (Digitalocean Virtual Machine (Droplet) Manager)
+## DOVM (Digitalocean Virtual Machine (Droplet) Manager)
 
-Create and manage DigitalOcean droplets from a simple YAML file.
+Create and manage DigitalOcean droplets easily!!
 
-You describe the droplets you want, and `dovm create` makes whatever is
-missing, waits until each one is up, and writes their IP addresses to files
-you can use with SSH or Ansible. Running it again is safe: it only creates
-what is still missing. `dovm destroy` deletes only droplets that dovm created.
+Simply describe the droplets you want using the easy to use `dovm init` command or edit the `yaml` file, and `dovm create`makes whatever is missing, waits until each one of the droplets is up, and writes their IP addresses to files you can use with SSH or Ansible. Running it again is safe: it only creates what is still missing.`dovm destroy` deletes only droplets that dovm created.
 
 - [Quick start](#quick-start): from nothing to running droplets in five steps
 - [Reference](#reference): every spec option and command, for power users
@@ -386,3 +383,7 @@ a GitHub release. To try the build locally without publishing:
 ```sh
 goreleaser release --snapshot --clean    # output in dist/
 ```
+
+## Acknowledgement
+
+This code base is a rewrite of the older python code in Golang for high performance and stability. Claude Code was used for developing automated unit tests, CI, github actions, and documentation. App behavior and end to end testing was performed and confirmed manually against digitalocean platform. For feature requests or bug reports, please open an Issue in this repo.
